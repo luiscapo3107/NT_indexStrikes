@@ -21,10 +21,10 @@ The `IndexStrikes` indicator is designed for NinjaTrader to plot the strike leve
 ## Usage
 1. Add the `IndexStrikes` indicator to your chart.
 2. Set the `APIToken` and `IndexTicker` properties in the indicator settings.
-3. The indicator will automatically fetch and display the strike levels and market status.
+3. Set the Panel view to current Panel (if not text will not be displayed) 
+4. The indicator will automatically fetch and display the strike levels and market status.
 
 ## Properties
 - **APIToken**: Your MarketData.app API token.
 - **IndexTicker**: The ticker symbol of the index you want to track.
 
-## Example
