@@ -32,179 +32,314 @@ using Brushes = System.Windows.Media.Brushes;
 //This namespace holds Indicators in this folder and is required. Do not change it. 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-	public class IndexStrikes : Indicator
-	{
-		private HttpClient httpClient;
-		private JavaScriptSerializer jsonSerializer;
-		private const int STRIKES_ABOVE = 10; 
-		private const int STRIKES_BELOW = 10; 
-		private List<double> strikeLevels = new List<double>(); 
-		private List<double> plotted_strikes = new List<double>();
-		private bool isInitialized = false;
-		private List<double> indexStrikes = new List<double>();
-		private string Ticker = ""; 
+    public class IndexStrikes : Indicator
+    {
+        private HttpClient httpClient;
+        private JavaScriptSerializer jsonSerializer;
+        private const int STRIKES_ABOVE = 10; 
+        private const int STRIKES_BELOW = 10; 
+        private List<double> strikeLevels = new List<double>(); 
+        private List<double> plotted_strikes = new List<double>();
+        private bool isInitialized = false;
+        private List<double> indexStrikes = new List<double>();
+        private string Ticker = ""; 
 
-		protected override void OnStateChange()
-		{ 
-			
-			if (State == State.SetDefaults)
-			{
-				Description									= @"Plots the strike levels of the given index in the chart.";
-				Name										= "IndexStrikes";
-				Calculate									= Calculate.OnBarClose;
-				IsOverlay									= false;
-				DisplayInDataBox							= true;
-				DrawOnPricePanel							= true;
-				DrawHorizontalGridLines						= true;
-				DrawVerticalGridLines						= true;
-				PaintPriceMarkers							= true;
-				ScaleJustification							= NinjaTrader.Gui.Chart.ScaleJustification.Right;
-				//Disable this property if your indicator requires custom values that cumulate with each new market data event. 
-				//See Help Guide for additional information.
-				IsSuspendedWhileInactive					= true;
-				APIToken					= string.Empty;
-				IndexTicker					= string.Empty;
-			}
-			else if (State == State.Configure)
-			{
-				Print("Initializing httpClient and jsonSerializer...");
-				httpClient = new HttpClient(); 
-				jsonSerializer = new JavaScriptSerializer(); 
-				Print("Initialization complete.");
+        // Add these private variables
+		private System.Windows.Media.Brush areaBrush;
+		private System.Windows.Media.Brush outlineBrush;
 
-			}
-			else if (State == State.Realtime)
-			{
-				if(!isInitialized){
-					isInitialized = true; 
-					Ticker = IndexTicker; 
-					Print("Calling Check MarketStatusAsync."); 
-					// Start the async operation without blocking
-					CheckMarketStatusAsync(); 
-				}
-			}
-			else if (State == State.Terminated)
-			{
-				if(httpClient != null)
-				{
-					Print("Disposing httpClient...");
-					httpClient.Dispose(); 
-					Print("httpClient disposed.");
-				}
-			}	
-		}
 
-		protected override void OnBarUpdate()
-		{
+        protected override void OnStateChange()
+        { 
+            if (State == State.SetDefaults)
+            {
+                Description                                 = @"Plots the strike levels of the given index in the chart.";
+                Name                                        = "IndexStrikes";
+                Calculate                                   = Calculate.OnBarClose;
+                IsOverlay                                   = false;
+                DisplayInDataBox                            = true;
+                DrawOnPricePanel                            = true;
+                DrawHorizontalGridLines                     = true;
+                DrawVerticalGridLines                       = true;
+                PaintPriceMarkers                           = true;
+                ScaleJustification                          = NinjaTrader.Gui.Chart.ScaleJustification.Right;
+                //Disable this property if your indicator requires custom values that cumulate with each new market data event. 
+                //See Help Guide for additional information.
+                IsSuspendedWhileInactive                    = true;
+                APIToken                    = string.Empty;
+                IndexTicker                 = string.Empty;
+            }
+            else if (State == State.Configure)
+            {
+                Print("Initializing httpClient and jsonSerializer...");
+                httpClient = new HttpClient(); 
+                jsonSerializer = new JavaScriptSerializer(); 
+                Print("Initialization complete.");
 
-		}
-		
-		private async Task CheckMarketStatusAsync()
-		{
-		    try
-		    {
-				if (string.IsNullOrEmpty(APIToken))
+              	// Initialize brushes
+				areaBrush = System.Windows.Media.Brushes.CornflowerBlue.Clone();
+				areaBrush.Opacity = 0.04;
+
+				outlineBrush = System.Windows.Media.Brushes.CornflowerBlue.Clone();
+				outlineBrush.Opacity = 1.0;
+
+            }
+            else if (State == State.Realtime)
+            {
+                if(!isInitialized){
+                    isInitialized = true; 
+                    Ticker = IndexTicker; 
+                    Print("Calling Check MarketStatusAsync."); 
+                    // Start the async operation without blocking
+                    CheckMarketStatusAsync(); 
+                }
+            }
+            else if (State == State.Terminated)
+            {
+                if(httpClient != null)
+                {
+                    Print("Disposing httpClient...");
+                    httpClient.Dispose(); 
+                    Print("httpClient disposed.");
+                }
+
+                // Dispose of brushes
+                if (areaBrush != null)
+                {
+          
+                    areaBrush = null;
+                }
+
+                if (outlineBrush != null)
+                {
+              
+                    outlineBrush = null;
+                }
+            }   
+        }
+
+        protected override void OnBarUpdate()
+        {
+
+        }
+
+        private async Task CheckMarketStatusAsync()
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(APIToken))
                 {
                     Print("API Token is not set.");
                     return;
                 }
 
-		        string marketStatusUrl = "https://api.marketdata.app/v1/markets/status" + "?" + "token="+ APIToken;
-		        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, marketStatusUrl);
-		        HttpResponseMessage response = await httpClient.SendAsync(request);
+                string marketStatusUrl = "https://api.marketdata.app/v1/markets/status" + "?" + "token="+ APIToken;
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, marketStatusUrl);
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+
+                string content = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    //bool isMarketOpen = ParseMarketStatus(content); //We fake it now for testing
+
+                    bool isMarketOpen = true; // Faked value for testing while the market is closed
+
+                    Print("Market Status: "+isMarketOpen);
+
+                    if (isMarketOpen)
+                    {
+                        await GetIndexPriceAsync();
+                    }
+                    else
+                    {
+                        UpdateMarketStatusOnUI(false);
+                    }
+                }
+                else
+                {
+                    Print("Error checking market status: " + response.ReasonPhrase);
+                }
+            }
+            catch (Exception ex)
+            {
+                Print("Exception in CheckMarketStatusAsync: "+ ex.Message);
+            }
+        }
+
+        private async Task GetIndexPriceAsync()
+        {
+            try
+            {
+                string indexPriceUrl = "https://api.marketdata.app/v1/stocks/quotes/" + IndexTicker + "?" + "token="+ APIToken;
+                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, indexPriceUrl);
+
+                HttpResponseMessage response = await httpClient.SendAsync(request);
+                string content = await response.Content.ReadAsStringAsync();
+
+                if (response.IsSuccessStatusCode)
+                {
+                    double indexPrice = ParseIndexPrice(content);
+                    double futurePrice = GetCurrentAsk() - TickSize; 
+                    Print("IndexPrice: "+indexPrice); 
+                    Print("FuturePrice: "+futurePrice); 
+
+                    // Update UI on the UI thread
+                    Dispatcher.InvokeAsync(() =>
+                    {
+                        UpdateStrikeLevelsOnUI(indexPrice, futurePrice);
+                    });
+                }
+                else
+                {
+                    Print("Error retrieving index price: "+ response.ReasonPhrase);
+                }
+            }
+            catch (Exception ex)
+            {
+                Print("Exception in GetIndexPriceAsync: "+ ex.Message);
+            }
+        }
+
+        // ... (Other methods remain unchanged) ...
+		private void UpdateStrikeLevelsOnUI(double indexPrice,double futurePrice)
+		{
+			Print("Calling UpdateStrikeLevelsOnUI"); 
+			try{
 				
-		        string content = await response.Content.ReadAsStringAsync();
+				        // Check if there are any bars loaded
+		        if (Count < 1)
+		        {
+		            Print("No bars loaded. Exiting UpdateStrikeLevelsOnUI.");
+		            return;
+		        }
+				
+				//Clear previous strike levels
+				strikeLevels.Clear(); 
+				indexStrikes.Clear(); 
+				
+				double ratio = futurePrice/indexPrice;
+				double roundedIndexStrike = Math.Floor(indexPrice); 
+				
+				// Draw new lines
+				for (int i = -STRIKES_BELOW; i <= STRIKES_ABOVE; i++)
+	        	{
+	                double indexStrike = (roundedIndexStrike + i);
+	                double strikeLevel = indexStrike * ratio;
+					strikeLevels.Add(strikeLevel); 
+					indexStrikes.Add(indexStrike);
+					
+	                string lineTag = IndexTicker + ": Line " + indexStrike.ToString();
+					
+	                Draw.HorizontalLine(this, lineTag, strikeLevel, Brushes.DodgerBlue, DashStyleHelper.Solid, 1);
 
-		        if (response.IsSuccessStatusCode)
-		        {
+					// Draw rectangle around the strike level
+            		string rectangleTag = IndexTicker + ": RegionHighlight " + indexStrike.ToString();
+
+					// Set area opacity to 4% (areaOpacity ranges from 0 to 100)
+           			int areaOpacity = 4;
 					
-		            //bool isMarketOpen = ParseMarketStatus(content); //We fake it now for testing
-					
-					bool isMarketOpen = true; // Faked value for testign while the market is closed
-					
-					Print("Market Status: "+isMarketOpen);
-					
-		            if (isMarketOpen)
-		            {
-		                await GetIndexPriceAsync();
-		            }
-		            else
-		            {
-		                UpdateMarketStatusOnUI(false);
-		            }
-		        }
-		        else
-		        {
-		            Print("Error checking market status: " + response.ReasonPhrase);
-		        }
-		    }
-		    catch (Exception ex)
-		    {
-		        Print("Exception in CheckMarketStatusAsync: "+ ex.Message);
-		    }
+					Draw.RegionHighlightY(
+	                this,
+	                rectangleTag,
+					false,
+	                strikeLevel - 2,
+	                strikeLevel + 2,
+	                null, //no outlineBrush
+					areaBrush,
+	                areaOpacity
+	           		);
+
+					// Force the chart to redraw
+        			if (ChartControl != null)
+            		ChartControl.InvalidateVisual();
+	        	}
+				Print("Strike lines and region plotted"); 
+			}catch (Exception ex)
+			{	
+				Print("Exception in UpdatesStrikeLevelsOnUI: "+ ex.Message); 
+			}
+			
+			
 		}
 
-		private async Task GetIndexPriceAsync()
+
+        protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
+        {
+            base.OnRender(chartControl, chartScale);
+            Print("Plotting Strike text in OnRender Method"); 
+            // Ensure we have strike levels to draw
+            if (strikeLevels == null || strikeLevels.Count == 0)
+                return;
+
+            // Create the SharpDX resources
+            SharpDX.Direct2D1.RenderTarget renderTarget = RenderTarget;
+            SharpDX.DirectWrite.TextFormat textFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12);
+            SharpDX.Direct2D1.Brush textBrush = new SharpDX.Direct2D1.SolidColorBrush(renderTarget, SharpDX.Color.White);
+
+            // Ensure SharpDX resources are available
+            if (textFormat == null || textBrush == null)
+                return;
+
+            // Ensure indexStrikes list has the same count as strikeLevels
+            if (indexStrikes == null || indexStrikes.Count != strikeLevels.Count)
+                return;
+
+            for (int i = 0; i < strikeLevels.Count; i++)
+            {
+                double strikeLevel = strikeLevels[i];
+                double indexStrike = indexStrikes[i];
+
+                // Convert the price (Y-axis value) to a pixel coordinate
+                float y = chartScale.GetYByValue(strikeLevel);
+
+                // Adjust Y-coordinate to be 2 pixels above the strike level
+                y -= 10;
+
+                // Define the text to display
+                string text = "Strike: "+ indexStrike;
+
+                // Create a TextLayout to measure the text size
+                using (var textLayout = new TextLayout(Core.Globals.DirectWriteFactory, text, textFormat, float.MaxValue, float.MaxValue))
+                {
+                    // Get the width and height of the text
+                    float textWidth = textLayout.Metrics.Width;
+                    float textHeight = textLayout.Metrics.Height;
+
+                    // Calculate X-coordinate: right edge minus text width minus padding
+                    float x = (float)ChartPanel.X + (float)ChartPanel.W - textWidth - 10; // 10 pixels padding from the right edge
+
+                    // Adjust Y-coordinate to center the text vertically at the adjusted y
+                    y -= textHeight / 2;
+
+                    // Draw the text
+                    RenderTarget.DrawTextLayout(new Vector2(x, y), textLayout, textBrush);
+                }
+            }
+
+            // Dispose of SharpDX resources
+            textBrush.Dispose();
+            textFormat.Dispose();
+            Print("Strike text plotted"); 
+        }
+		
+		private void UpdateMarketStatusOnUI(bool isMarketOpen)
 		{
-		    try
+		    // Update the UI to reflect the market status
+		    if (!isMarketOpen)
 		    {
-		        string indexPriceUrl = "https://api.marketdata.app/v1/stocks/quotes/" + IndexTicker + "?" + "token="+ APIToken;
-		        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, indexPriceUrl);
+		        // Clear any existing strike levels
+		        strikeLevels.Clear();
+		        indexStrikes.Clear();
 
-		        HttpResponseMessage response = await httpClient.SendAsync(request);
-		        string content = await response.Content.ReadAsStringAsync();
+		        // Remove any drawn objects from the chart
+		        RemoveDrawObjects();
 
-		        if (response.IsSuccessStatusCode)
-		        {
-		            double indexPrice = ParseIndexPrice(content);
-					double futurePrice = GetCurrentAsk() - TickSize; 
-					Print("IndexPrice: "+indexPrice); 
-					Print("FuturePrice: "+futurePrice); 
-					
-		            //UpdateIndexPriceOnUI(indexPrice);
-					
-					// Update UI on the UI thread
-					Dispatcher.InvokeAsync(() =>
-					{
-					    UpdateStrikeLevelsOnUI(indexPrice, futurePrice);
-					});
-		        }
-		        else
-		        {
-		            Print("Error retrieving index price: "+ response.ReasonPhrase);
-		        }
-		    }
-		    catch (Exception ex)
-		    {
-		        Print("Exception in GetIndexPriceAsync: "+ ex.Message);
+		        // Optionally, display a message on the chart
+		        Draw.TextFixed(this, "MarketClosed", "Market is closed", TextPosition.Center, Brushes.Red, new Gui.Tools.SimpleFont("Arial", 24), Brushes.Transparent, Brushes.Transparent, 0);
 		    }
 		}
-
-		private bool ParseMarketStatus(string json)
-		{
-		    // Deserialize the JSON into a dynamic object
-            var obj = jsonSerializer.Deserialize<dynamic>(json);
-
-		    // Check if the response status is "ok"
-		    if ((string)obj["s"] != "ok")
-		    {
-		        throw new Exception("API response indicates failure.");
-		    }
-
-		    // Access the "status" array and get the first element
-		    var statusArray = obj["status"] as object[];
-		    if (statusArray == null || statusArray.Length == 0)
-		    {
-		        throw new Exception("No market status data available.");
-		    }
-
-		    string marketStatus = (string)statusArray[0];
-
-		    // Determine if the market is open
-		    bool isMarketOpen = marketStatus.Equals("open", StringComparison.OrdinalIgnoreCase);
-		    return isMarketOpen;
-		}
-
+		
 		private double ParseIndexPrice(string json)
 		{
 		    // Deserialize the JSON into a dynamic object
@@ -227,136 +362,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 		    return indexPrice;
 		}
 
-		private void UpdateMarketStatusOnUI(bool isMarketOpen)
-		{
-		    Dispatcher.InvokeAsync(() =>
-		    {
-		        if (!isMarketOpen)
-		        {
-		            Draw.TextFixed(this, "MarketStatus", "Market is closed", TextPosition.TopLeft);
-		        }
-		    });
-		}
 
-		private void UpdateIndexPriceOnUI(double indexPrice)
-		{
-			
-		    Dispatcher.InvokeAsync(() =>
-		    {
-		        Draw.TextFixed(this, "IndexPrice", "Current "+ IndexTicker + " Price: "+ indexPrice, TextPosition.TopLeft);
-		    });
-		}
-		
-		private void UpdateStrikeLevelsOnUI(double indexPrice,double futurePrice)
-		{
-			Print("Calling UpdateStrikeLevelsOnUI"); 
-			try{
-				
-				//Clear previous strike levels
-				strikeLevels.Clear(); 
-				indexStrikes.Clear(); 
-				
-				double ratio = futurePrice/indexPrice;
-				double roundedIndexStrike = Math.Floor(indexPrice); 
-				
-				// Draw new lines
-				for (int i = -STRIKES_BELOW; i <= STRIKES_ABOVE; i++)
-	        	{
-	                double indexStrike = (roundedIndexStrike + i);
-	                double strikeLevel = indexStrike * ratio;
-					strikeLevels.Add(strikeLevel); 
-					indexStrikes.Add(indexStrike);
-					
-	                string lineTag = IndexTicker + ": Line " + indexStrike.ToString();
-					
-	                Draw.HorizontalLine(this, lineTag, strikeLevel, Brushes.DodgerBlue, DashStyleHelper.Solid, 1);
 
-					// Force the chart to redraw
-        			if (ChartControl != null)
-            		ChartControl.InvalidateVisual();
-	        	}
-				Print("Strike lines plotted"); 
-			}catch (Exception ex)
-			{	
-				Print("Exception in UpdatesStrikeLevelsOnUI: "+ ex.Message); 
-			}
-			
-			
-		}
+        #region Properties
+        [NinjaScriptProperty]
+        [Display(Name="APIToken", Description="MarketData.app API token", Order=1, GroupName="Parameters")]
+        public string APIToken
+        { get; set; }
 
-		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
-		{
-		    base.OnRender(chartControl, chartScale);
-			Print("Plotting Strike text in OnRender Method"); 
-		    // Ensure we have strike levels to draw
-		    if (strikeLevels == null || strikeLevels.Count == 0)
-		        return;
+        [NinjaScriptProperty]
+        [Display(Name="IndexTicker", Description="Index Ticket Symbol", Order=2, GroupName="Parameters")]
+        public string IndexTicker
+        { get; set; }
+        #endregion
 
-			// Create the SharpDX resources
-		    SharpDX.Direct2D1.RenderTarget renderTarget = RenderTarget;
-		    SharpDX.DirectWrite.TextFormat textFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12);
-		    SharpDX.Direct2D1.Brush textBrush = new SharpDX.Direct2D1.SolidColorBrush(renderTarget, SharpDX.Color.White);
-
-			// Ensure SharpDX resources are available
-            if (textFormat == null || textBrush == null)
-                return;
-			
-			// Ensure indexStrikes list has the same count as strikeLevels
-		    if (indexStrikes == null || indexStrikes.Count != strikeLevels.Count)
-		        return;
-			
-			
-			for (int i = 0; i < strikeLevels.Count; i++)
-		    {
-		        double strikeLevel = strikeLevels[i];
-		        double indexStrike = indexStrikes[i];
-
-		        // Convert the price (Y-axis value) to a pixel coordinate
-		        float y = chartScale.GetYByValue(strikeLevel);
-
-		        // Adjust Y-coordinate to be 2 pixels above the strike level
-		        y -= 10;
-				
-		        // Define the text to display
-		        string text = "Strike: "+ indexStrike;
-
-		        // Create a TextLayout to measure the text size
-		        using (var textLayout = new TextLayout(Core.Globals.DirectWriteFactory, text, textFormat, float.MaxValue, float.MaxValue))
-		        {
-		            // Get the width and height of the text
-		            float textWidth = textLayout.Metrics.Width;
-		            float textHeight = textLayout.Metrics.Height;
-
-		            // Calculate X-coordinate: right edge minus text width minus padding
-		            float x = (float)ChartPanel.X + (float)ChartPanel.W - textWidth - 10; // 10 pixels padding from the right edge
-
-		            // Adjust Y-coordinate to center the text vertically at the adjusted y
-		            y -= textHeight / 2;
-
-			        // Draw the text
-                    RenderTarget.DrawTextLayout(new Vector2(x, y), textLayout, textBrush);
-				}
-		    }
-
-		    // Dispose of SharpDX resources
-		    textBrush.Dispose();
-		    textFormat.Dispose();
-			Print("Strike text plotted"); 
-		}
-
-		#region Properties
-		[NinjaScriptProperty]
-		[Display(Name="APIToken", Description="MarketData.app API token", Order=1, GroupName="Parameters")]
-		public string APIToken
-		{ get; set; }
-
-		[NinjaScriptProperty]
-		[Display(Name="IndexTicker", Description="Index Ticket Symbol", Order=2, GroupName="Parameters")]
-		public string IndexTicker
-		{ get; set; }
-		#endregion
-
-	}
+    }
 }
 
 #region NinjaScript generated code. Neither change nor remove.
