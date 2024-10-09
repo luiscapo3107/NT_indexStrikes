@@ -26,6 +26,7 @@ using SharpDX;
 using SharpDX.Direct2D1;
 using SharpDX.DirectWrite;
 using Brushes = System.Windows.Media.Brushes;
+using System.Timers; 
 #endregion
 
 namespace NinjaTrader.NinjaScript.Indicators
@@ -40,6 +41,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private const int STRIKES_BELOW = 10;
         private List<double> strikeLevels = new List<double>();
         private List<double> indexStrikes = new List<double>();
+        private Timer updateTimer; 
 
         // Variables for expected move calculation
         private double expectedMoveValue = 0.0;
@@ -81,14 +83,28 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // Initialize HTTP client and JSON serializer
                 httpClient = new HttpClient();
                 jsonSerializer = new JavaScriptSerializer();
+
+                //Initialize the timer
+                updateTimer = new Timer(600000); // 600000 milliseconds = 10 minutes
+                updateTimer.Elapsed += OnTimerElapsed; 
+                updateTimer.AutoReset = true; 
             }
             else if (State == State.DataLoaded)
             {
+                // Start the timer
+                updateTimer.Start(); 
                 // Start the async operation without blocking
                 CheckMarketStatusAsync();
             }
             else if (State == State.Terminated)
             {
+                // Stop and dispose of the timer
+                if (updateTimer != null)
+                {
+                    updateTimer.Stop();
+                    updateTimer.Dispose();
+                }
+
 			    // Dispose of HTTP client
 			    if (httpClient != null)
 			        httpClient.Dispose();
@@ -99,7 +115,11 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
 
         #endregion
-		
+		private void OnTimerElapsed(object sender, ElapsedEventArgs e)
+        {
+            // This method will be called every x minutes
+            CheckMarketStatusAsync();
+        }
 		public override void OnRenderTargetChanged()
 		{
 		    // Dispose existing resources
@@ -245,7 +265,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     ParseOptionsChain(content, out lastPriceCall, out lastPricePut);
 
                     // Calculate the expected move
-                    expectedMoveValue = (lastPriceCall + lastPricePut) * 0.85;
+                    expectedMoveValue = ((lastPriceCall + lastPricePut) * 0.85)/2;
 
                     Print("Expected Move Value: " + expectedMoveValue);
                 }
