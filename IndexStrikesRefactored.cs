@@ -77,6 +77,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                 IsSuspendedWhileInactive                    = true;
                 APIToken                                    = string.Empty;
                 IndexTicker                                 = string.Empty;
+                Username					                = string.Empty;
+				Password					                = string.Empty;
             }
             else if (State == State.Configure)
             {
