@@ -542,6 +542,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 // Convert the price (Y-axis value) to a pixel coordinate
                 float y = chartScale.GetYByValue(strikeLevel);
+                Print("Plotting strike level: "+strikeLevel+", Y coordinate: " + y);
 
                 // Draw the strike line
                 RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), strikeLineBrush, 1);
