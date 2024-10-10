@@ -38,6 +38,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private JavaScriptSerializer jsonSerializer;
 		private Timer updateTimer;
 		private List<double> strikeLevels = new List<double>();
+		private List<double> indexStrikes = new List<double>();
 		private double currentPrice;
 
 		// SharpDX Resources
@@ -51,6 +52,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double futurePrice;
 		private double indexPrice;
 		private double ratio;
+
+		private List<double> netAskVolumes = new List<double>();
 
 		protected override void OnStateChange()
 		{
@@ -66,7 +69,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				DrawVerticalGridLines						= true;
 				PaintPriceMarkers							= true;
 				ScaleJustification							= NinjaTrader.Gui.Chart.ScaleJustification.Right;
-				IsSuspendedWhileInactive					= true;
+				IsSuspendedWhileInactive				= true;
 				Username				= string.Empty;
 				Password					= string.Empty;
 			}
@@ -74,7 +77,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				httpClient = new HttpClient();
 				jsonSerializer = new JavaScriptSerializer();
-				updateTimer = new Timer(60000); // 60 seconds
+				updateTimer = new Timer(10000); // 10 seconds
 				updateTimer.Elapsed += OnTimerElapsed;
 				updateTimer.AutoReset = true;
 			}
@@ -195,11 +198,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Print("Options Data count: " + optionsData.Count);
 
 				strikeLevels.Clear();
+				indexStrikes.Clear();
+				netAskVolumes.Clear();
 
 				// Calculate future price and ratio
 				futurePrice = GetCurrentAsk() - TickSize;
 				indexPrice = Convert.ToDouble(data["Price"]);
 				ratio = futurePrice / indexPrice;
+				double roundedIndexStrike = Math.Floor(indexPrice);
 
 				Print("Future Price: " + futurePrice);
 				Print("Index Price: " + indexPrice);
@@ -207,12 +213,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				foreach (var item in optionsData)
 				{
-					if (item.ContainsKey("strike"))
+					if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume"))
 					{
-						double strike = Convert.ToDouble(item["strike"]);
-						double adjustedStrike = strike * ratio;
-						strikeLevels.Add(adjustedStrike);
-						Print("Added adjusted strike level: " + adjustedStrike + " (original: " + strike + ")");
+						double indexStrike = Convert.ToDouble(item["strike"]);
+						double futureStrike = indexStrike * ratio;
+						double netAskVolume = Convert.ToDouble(item["Net_ASK_Volume"]);
+
+						indexStrikes.Add(indexStrike);
+						strikeLevels.Add(futureStrike);
+						netAskVolumes.Add(netAskVolume);
+
+						Print("Added index strike: " + indexStrike + ", future strike: " + futureStrike + ", Net Ask Volume: " + netAskVolume);
 					}
 				}
 
@@ -290,57 +301,101 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+		private SharpDX.Color GetColorForNetAskVolume(double netAskVolume)
+		{
+			// Define the range for color interpolation
+			double maxVolume = 30000; // Adjust this value based on your typical volume range
+
+			// Normalize the netAskVolume to a value between -1 and 1
+			double normalizedVolume = Math.Max(-1, Math.Min(1, netAskVolume / maxVolume));
+
+			byte alpha = 64; // 50% opacity
+
+			if (Math.Abs(normalizedVolume) < 0.1) // Close to zero, use a more vibrant blue
+			{
+				return new SharpDX.Color((byte)65, (byte)105, (byte)225, alpha); // Royal Blue
+			}
+			else if (normalizedVolume < 0) // Negative, use red gradient
+			{
+				byte intensity = (byte)(255 * -normalizedVolume);
+				return new SharpDX.Color(intensity, (byte)0, (byte)0, alpha);
+			}
+			else // Positive, use green gradient
+			{
+				byte intensity = (byte)(255 * normalizedVolume);
+				return new SharpDX.Color((byte)0, intensity, (byte)0, alpha);
+			}
+		}
+		
 		private void PlotStrikeLevels(ChartControl chartControl, ChartScale chartScale)
 		{
 			Print("PlotStrikeLevels called. Strike levels count: " + strikeLevels.Count);
 
-			if (strikeLevels.Count == 0) return;
+			if (strikeLevels.Count == 0 || indexStrikes.Count != strikeLevels.Count || netAskVolumes.Count != strikeLevels.Count) return;
 
 			float xStart = ChartPanel.X;
 			float xEnd = ChartPanel.X + ChartPanel.W;
 
-			SharpDX.Color paleBlueColor = new SharpDX.Color(173, 216, 230, 200);
-			SharpDX.Color transparentBlueColor = new SharpDX.Color(0, 191, 255, 10);
-
-			using (var paleLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, paleBlueColor))
-			using (var transparentAreaBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, transparentBlueColor))
+			for (int i = 0; i < strikeLevels.Count; i++)
 			{
-				foreach (double strikeLevel in strikeLevels)
+				double strikeLevel = strikeLevels[i];
+				double indexStrike = indexStrikes[i];
+				double netAskVolume = netAskVolumes[i];
+				float y = chartScale.GetYByValue(strikeLevel);
+
+				Print("Plotting strike level: " + strikeLevel + ", Index strike: " + indexStrike + ", Y coordinate: " + y + ", Net Ask Volume: " + netAskVolume);
+
+				SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume);
+
+				// Draw the line
+				using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)65, (byte)105, (byte)225, (byte)64))) // Royal Blue with 50% opacity
 				{
-					float y = chartScale.GetYByValue(strikeLevel);
+					RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 1);
+				}
 
-					Print("Plotting strike level: " + strikeLevel + ", Y coordinate: " + y);
+				// Calculate rectangle coordinates
+				float yTop = chartScale.GetYByValue(strikeLevel + 1);
+				float yBottom = chartScale.GetYByValue(strikeLevel - 1);
 
-					// Draw the line even if it's outside the visible area
-					RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), paleLineBrush, 1);
-
-					// Calculate rectangle coordinates
-					float yTop = chartScale.GetYByValue(strikeLevel + 2);
-					float yBottom = chartScale.GetYByValue(strikeLevel - 2);
-
-					// Draw the rectangle
+				// Draw the rectangle
+				using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, rectangleColor))
+				{
 					RenderTarget.FillRectangle(
 						new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop),
-						transparentAreaBrush
+						rectangleBrush
 					);
+				}
 
-					string text = strikeLevel.ToString("F2");
+				// Draw text
+				string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
+				string volumeText = "Net Ask Vol: " + FormatVolume(netAskVolume);
 
-					using (var textLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, text, textFormat, float.MaxValue, float.MaxValue))
-					{
-						float textWidth = textLayout.Metrics.Width;
-						float textHeight = textLayout.Metrics.Height;
+				using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
+				using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
+				using (var volumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, volumeText, textFormat, float.MaxValue, float.MaxValue))
+				{
+					float strikeTextWidth = strikeTextLayout.Metrics.Width;
+					float strikeTextHeight = strikeTextLayout.Metrics.Height;
+					float volumeTextWidth = volumeTextLayout.Metrics.Width;
 
-						float x = (float)ChartPanel.X + (float)ChartPanel.W - textWidth - 5;
-						float yText = y - textHeight / 2;
+					float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, volumeTextWidth) - 5;
+					float yStrikeText = y - strikeTextHeight;
+					float yVolumeText = y + 2;
 
-						// Draw text even if it's outside the visible area
-						RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yText), textLayout, textBrush);
-					}
+					RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
+					RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yVolumeText), volumeTextLayout, textBrush);
 				}
 			}
 
 			Print("PlotStrikeLevels completed");
+		}
+
+		private string FormatVolume(double volume)
+		{
+			// Convert the volume to hundreds
+			double volumeInHundreds = volume * 100; 
+			string sign = volumeInHundreds < 0 ? "-" : "";
+			return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
 		}
 		
 		#region Properties
