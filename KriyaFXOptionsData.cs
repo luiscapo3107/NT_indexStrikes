@@ -55,6 +55,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private List<double> netAskVolumes = new List<double>();
 
+		private double totalAskVolume;
+		private double totalGexVolume;
+		private SharpDX.DirectWrite.TextFormat tableTitleFormat;
+		private SharpDX.DirectWrite.TextFormat tableContentFormat;
+		private SharpDX.Direct2D1.Brush tableBorderBrush;
+		private SharpDX.Direct2D1.Brush tableBackgroundBrush;
+
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults)
@@ -229,6 +236,15 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				Print("Processed strike levels count: " + strikeLevels.Count);
 
+				if (options.ContainsKey("Total_ASK_Volume"))
+				{
+					totalAskVolume = Convert.ToDouble(options["Total_ASK_Volume"]);
+				}
+				if (options.ContainsKey("Total_GEX_Volume"))
+				{
+					totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
+				}
+
 				// Use Dispatcher to update the UI
 				Dispatcher.InvokeAsync(() =>
 				{
@@ -264,8 +280,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				// Initialize SharpDX resources
 				textFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12);
+				tableTitleFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 14);
+				tableContentFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12);
+			
 				textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White);
 				strikeLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.DodgerBlue);
+				tableBorderBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White);
+				tableBackgroundBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color(0, 0, 0, 192)); // More opaque black (75% opacity)
 			}
 		}
 
@@ -274,6 +295,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			if (textBrush != null) { textBrush.Dispose(); textBrush = null; }
 			if (strikeLineBrush != null) { strikeLineBrush.Dispose(); strikeLineBrush = null; }
 			if (textFormat != null) { textFormat.Dispose(); textFormat = null; }
+			if (tableTitleFormat != null) { tableTitleFormat.Dispose(); tableTitleFormat = null; }
+			if (tableContentFormat != null) { tableContentFormat.Dispose(); tableContentFormat = null; }
+			if (tableBorderBrush != null) { tableBorderBrush.Dispose(); tableBorderBrush = null; }
+			if (tableBackgroundBrush != null) { tableBackgroundBrush.Dispose(); tableBackgroundBrush = null; }
 		}
 
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
@@ -298,6 +323,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				Print("Calling PlotStrikeLevels");
 				PlotStrikeLevels(chartControl, chartScale);
+
+				Print("Calling DrawVolumeTable");
+				DrawVolumeTable(chartControl);
 			}
 		}
 
@@ -398,6 +426,56 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
 		}
 		
+		private void DrawVolumeTable(ChartControl chartControl)
+		{
+			float tableWidth = 220;
+			float tableHeight = 100;
+			float padding = 10;
+			float labelWidth = 120;
+			float titleHeight = 30;
+
+			// Use ChartPanel properties for positioning
+			float x = ChartPanel.W - tableWidth - padding;
+			float y = ChartPanel.H - tableHeight - padding;
+
+			// Draw table background
+			RenderTarget.FillRectangle(new SharpDX.RectangleF(x, y, tableWidth, tableHeight), tableBackgroundBrush);
+
+			// Draw table border
+			RenderTarget.DrawRectangle(new SharpDX.RectangleF(x, y, tableWidth, tableHeight), tableBorderBrush);
+
+			// Center the title
+			tableTitleFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+			RenderTarget.DrawText("Volume Summary", tableTitleFormat, new SharpDX.RectangleF(x, y, tableWidth, titleHeight), textBrush);
+
+			// Draw table content
+			float contentY = y + titleHeight;
+			float valueX = x + labelWidth;
+
+			// Total Ask Volume
+			RenderTarget.DrawText("Total Ask Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY, labelWidth, 25), textBrush);
+			RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY, tableWidth - labelWidth - 5, 25), textBrush);
+
+			// Total GEX Volume
+			RenderTarget.DrawText("Total GEX Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 35, labelWidth, 25), textBrush);
+			RenderTarget.DrawText(FormatGexVolumeForDisplay(totalGexVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 35, tableWidth - labelWidth - 5, 25), textBrush);
+		}
+		private string FormatVolumeForDisplay(double volume)
+		{
+			// Convert the volume to hundreds
+			double volumeInHundreds = volume * 100; 
+			string sign = volumeInHundreds < 0 ? "-" : "";
+			return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
+		}
+
+		private string FormatGexVolumeForDisplay(double gexVolume)
+		{
+			// GEX is in billions, so divide by 1 billion to get the number of billions
+			double gexInBillions = gexVolume / 1000000000;
+			string sign = gexInBillions < 0 ? "-" : "";
+			return sign + "$" + String.Format("{0:F3}", Math.Abs(gexInBillions)) + " Bn";
+		}
+		
 		#region Properties
 		[NinjaScriptProperty]
 		[Display(Name="Username", Description="User Name for KriyaFX service", Order=1, GroupName="Parameters")]
@@ -468,4 +546,5 @@ namespace NinjaTrader.NinjaScript.Strategies
 	}
 }
 
+#endregion
 #endregion
