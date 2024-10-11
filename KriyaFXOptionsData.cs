@@ -55,6 +55,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private List<double> netAskVolumes = new List<double>();
 
+		private bool strikeLevelsCalculated = false;
+		private DateTime marketOpenTime = new DateTime(1, 1, 1, 15, 30, 0); // 15:30 CET
+
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults)
@@ -250,9 +253,132 @@ namespace NinjaTrader.NinjaScript.Indicators
 				Print("Stack trace: " + ex.StackTrace);
 			}
 		}
-		private void OnTimerElapsed(object sender, ElapsedEventArgs e)
+		private async void OnTimerElapsed(object sender, ElapsedEventArgs e)
 		{
-			FetchOptionsData();
+			if (!strikeLevelsCalculated && DateTime.Now.TimeOfDay >= marketOpenTime.TimeOfDay)
+			{
+				await CalculateStrikeLevels();
+			}
+			else if (strikeLevelsCalculated)
+			{
+				await UpdateNetAskVolumes();
+			}
+		}
+
+		private async Task CalculateStrikeLevels()
+		{
+			try
+			{
+				Print("Calculating strike levels...");
+				var optionsData = await FetchLatestOptionsData();
+				if (optionsData != null)
+				{
+					ProcessStrikeLevels(optionsData);
+					strikeLevelsCalculated = true;
+					Print("Strike levels calculated successfully.");
+				}
+			}
+			catch (Exception ex)
+			{
+				Print("Error calculating strike levels: " + ex.Message);
+			}
+		}
+
+		private async Task UpdateNetAskVolumes()
+		{
+			try
+			{
+				Print("Updating Net Ask Volumes...");
+				var optionsData = await FetchLatestOptionsData();
+				if (optionsData != null)
+				{
+					UpdateVolumes(optionsData);
+					Print("Net Ask Volumes updated successfully.");
+				}
+			}
+			catch (Exception ex)
+			{
+				Print("Error updating Net Ask Volumes: " + ex.Message);
+			}
+		}
+
+		private async Task<Dictionary<string, object>> FetchLatestOptionsData()
+		{
+			Print("Fetching latest options data...");
+			var request = new HttpRequestMessage(HttpMethod.Get, "https://kriyafx.de/api/options-chain?latest");
+			request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
+
+			var response = await httpClient.SendAsync(request);
+			Print("Response status code: " + response.StatusCode);
+
+			if (response.IsSuccessStatusCode)
+			{
+				var responseContent = await response.Content.ReadAsStringAsync();
+				Print("Response content length: " + responseContent.Length);
+				return jsonSerializer.Deserialize<Dictionary<string, object>>(responseContent);
+			}
+			else
+			{
+				Print("Failed to fetch options data. Status code: " + response.StatusCode);
+				return null;
+			}
+		}
+
+		private void ProcessStrikeLevels(Dictionary<string, object> data)
+		{
+			// ... existing code to process strike levels ...
+			// Make sure to clear and populate strikeLevels and indexStrikes lists
+			// but don't update netAskVolumes here
+		}
+
+		private void UpdateVolumes(Dictionary<string, object> data)
+		{
+			if (!data.ContainsKey("Options"))
+			{
+				Print("Options data not found in the response.");
+				return;
+			}
+
+			var options = data["Options"] as Dictionary<string, object>;
+			if (options == null || !options.ContainsKey("Data"))
+			{
+				Print("Options or Data not found in the response.");
+				return;
+			}
+
+			var dataJson = jsonSerializer.Serialize(options["Data"]);
+			var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
+
+			netAskVolumes.Clear();
+
+			foreach (var item in optionsData)
+			{
+				if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume"))
+				{
+					double indexStrike = Convert.ToDouble(item["strike"]);
+					double netAskVolume = Convert.ToDouble(item["Net_ASK_Volume"]);
+
+					int index = indexStrikes.IndexOf(indexStrike);
+					if (index != -1)
+					{
+						netAskVolumes.Add(netAskVolume);
+					}
+				}
+			}
+
+			// Invalidate the chart to trigger OnRender
+			Dispatcher.InvokeAsync(() =>
+			{
+				if (ChartControl != null)
+				{
+					ChartControl.InvalidateVisual();
+					Print("Chart invalidated for redraw");
+				}
+				else
+				{
+					Print("ChartControl is null");
+				}
+			});
 		}
 
 		public override void OnRenderTargetChanged()
@@ -311,7 +437,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 			byte alpha = 64; // 50% opacity
 
-			if (Math.Abs(normalizedVolume) < 0.1) // Close to zero, use a more vibrant blue
+			if (Math.Abs(normalizedVolume) < 0.2) // Close to zero, use a more vibrant blue
 			{
 				return new SharpDX.Color((byte)65, (byte)105, (byte)225, alpha); // Royal Blue
 			}
