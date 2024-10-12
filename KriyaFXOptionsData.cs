@@ -62,6 +62,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private SharpDX.Direct2D1.Brush tableBorderBrush;
 		private SharpDX.Direct2D1.Brush tableBackgroundBrush;
 
+		private double expectedMove;
+		private double expectedMaxPrice;
+		private double expectedMinPrice;
+
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults)
@@ -79,6 +83,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				IsSuspendedWhileInactive				= true;
 				Username				= string.Empty;
 				Password					= string.Empty;
+				Print("KriyaFXOptionsData: SetDefaults completed");
 			}
 			else if (State == State.Configure)
 			{
@@ -87,11 +92,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 				updateTimer = new Timer(10000); // 10 seconds
 				updateTimer.Elapsed += OnTimerElapsed;
 				updateTimer.AutoReset = true;
+				Print("KriyaFXOptionsData: Configure completed");
 			}
 			else if (State == State.DataLoaded)
 			{
 				updateTimer.Start();
 				Login();
+				Print("KriyaFXOptionsData: DataLoaded - Timer started and Login initiated");
 			}
 			else if (State == State.Terminated)
 			{
@@ -103,6 +110,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					updateTimer.Dispose();
 				}
 				DisposeSharpDXResources();
+				Print("KriyaFXOptionsData: Terminated - Resources disposed");
 			}
 		}
 
@@ -110,6 +118,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private async void Login()
 		{
+			Print("KriyaFXOptionsData: Login started");
 			try
 			{
 				Print("Attempting login...");
@@ -134,25 +143,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 					var tokenObject = jsonSerializer.Deserialize<Dictionary<string, object>>(responseContent);
 					bearerToken = tokenObject["token"].ToString();
 					Print("Login successful. Bearer token received.");
-
+					Print("KriyaFXOptionsData: Login successful, bearer token received");
 					FetchOptionsData();
 				}
 				else
 				{
 					Print("Login failed. Status code: " + response.StatusCode);
+					Print("KriyaFXOptionsData: Login failed. Status code: " + response.StatusCode);
 				}
 			}
 			catch (Exception ex)
 			{
 				Print("Error during login: " + ex.Message);
+				Print("KriyaFXOptionsData: Login Error - " + ex.Message);
 			}
 		}
 
 		private async void FetchOptionsData()
 		{
+			Print("KriyaFXOptionsData: FetchOptionsData started");
 			try
 			{
-				Print("Fetching options data...");
+				Print("Fetching options data..." + DateTime.Now.ToString("HH:mm:ss"));
 				var request = new HttpRequestMessage(HttpMethod.Get, "https://kriyafx.de/api/options-chain?latest");
 				request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
 
@@ -161,6 +173,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				if (response.IsSuccessStatusCode)
 				{
+					Print("KriyaFXOptionsData: Options data fetched successfully");
 					var responseContent = await response.Content.ReadAsStringAsync();
 					Print("Response content length: " + responseContent.Length);
 					Print("Response content (first 500 chars): " + responseContent.Substring(0, Math.Min(500, responseContent.Length)));
@@ -170,25 +183,28 @@ namespace NinjaTrader.NinjaScript.Indicators
 				{
 					Print("Failed to fetch options data. Status code: " + response.StatusCode);
 					Print("Response content: " + await response.Content.ReadAsStringAsync());
+					Print("KriyaFXOptionsData: Failed to fetch options data. Status code: " + response.StatusCode);
 				}
 			}
 			catch (Exception ex)
 			{
 				Print("Error fetching options data: " + ex.Message);
 				Print("Stack trace: " + ex.StackTrace);
+				Print("KriyaFXOptionsData: FetchOptionsData Error - " + ex.Message);
 			}
 		}
 		private void ProcessOptionsData(string json)
 		{
+			Print("KriyaFXOptionsData: ProcessOptionsData started");
 			try
 			{
 				Print("Processing options data...");
 				var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
-				Print("Deserialized data keys: " + string.Join(", ", data.Keys));
-
+				
 				if (!data.ContainsKey("Options"))
 				{
 					Print("Options data not found in the response.");
+					Print("KriyaFXOptionsData: Options data not found in the response");
 					return;
 				}
 
@@ -196,8 +212,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (options == null || !options.ContainsKey("Data"))
 				{
 					Print("Options or Data not found in the response.");
+					Print("KriyaFXOptionsData: Options or Data not found in the response");
 					return;
 				}
+
+				if (options.ContainsKey("ExpectedMove"))
+				{
+					expectedMove = Convert.ToDouble(options["ExpectedMove"]);
+					indexPrice = Convert.ToDouble(data["Price"]);
+					expectedMaxPrice = indexPrice + expectedMove;
+					expectedMinPrice = indexPrice - expectedMove;
+					Print("Expected Move: " + expectedMove);
+					Print("Expected Max Price: " + expectedMaxPrice);
+					Print("Expected Min Price: " + expectedMinPrice);
+					Print("KriyaFXOptionsData: Expected move data processed - Index Price: " + indexPrice + ", Expected Move: " + expectedMove);
+					Print("KriyaFXOptionsData: Expected Max Price: " + expectedMaxPrice + ", Expected Min Price: " + expectedMinPrice);
+				}				
 
 				var dataJson = jsonSerializer.Serialize(options["Data"]);
 				var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
@@ -220,6 +250,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				foreach (var item in optionsData)
 				{
+				
 					if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume"))
 					{
 						double indexStrike = Convert.ToDouble(item["strike"]);
@@ -253,6 +284,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						ChartControl.InvalidateVisual();
 						Print("Chart invalidated for redraw");
+						Print("KriyaFXOptionsData: Chart invalidated for redraw");
 					}
 					else
 					{
@@ -264,10 +296,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 			{
 				Print("Error processing options data: " + ex.Message);
 				Print("Stack trace: " + ex.StackTrace);
+				Print("KriyaFXOptionsData: ProcessOptionsData Error - " + ex.Message);
 			}
 		}
 		private void OnTimerElapsed(object sender, ElapsedEventArgs e)
 		{
+			Print("KriyaFXOptionsData: Timer elapsed, fetching new data");
 			FetchOptionsData();
 		}
 
@@ -304,29 +338,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			base.OnRender(chartControl, chartScale);
+			Print("KriyaFXOptionsData: OnRender started");
 
-			Print("OnRender called");
-
-			lock (renderLock)
+			if (RenderTarget == null || textFormat == null || textBrush == null || strikeLineBrush == null)
 			{
-				if (RenderTarget == null)
-				{
-					Print("RenderTarget is null");
-					return;
-				}
-
-				if (textFormat == null || textBrush == null || strikeLineBrush == null)
-				{
-					Print("Some SharpDX resources are null");
-					return;
-				}
-
-				Print("Calling PlotStrikeLevels");
-				PlotStrikeLevels(chartControl, chartScale);
-
-				Print("Calling DrawVolumeTable");
-				DrawVolumeTable(chartControl);
+				Print("KriyaFXOptionsData: OnRender - Essential resources are null");
+				return;
 			}
+
+			Print("Calling PlotStrikeLevels");
+			PlotStrikeLevels(chartControl, chartScale);
+
+			Print("Calling DrawVolumeTable");
+			DrawVolumeTable(chartControl);
+
+			// Draw Expected Move levels
+			Print("Calling ExpectedMoveLevels");
+
+			if (expectedMaxPrice > 0 && expectedMinPrice > 0)
+			{
+				Print("Expected Max Price: " + expectedMaxPrice);
+				Print("Expected Min Price: " + expectedMinPrice);
+				DrawExpectedMoveLevel(chartControl, chartScale, expectedMaxPrice, "Expected Max Price");
+				DrawExpectedMoveLevel(chartControl, chartScale, expectedMinPrice, "Expected Min Price");
+			}
+			else
+			{
+				Print("KriyaFXOptionsData: Invalid expected max/min prices. Cannot plot expected move levels");
+			}
+
+			Print("KriyaFXOptionsData: OnRender completed");
 		}
 
 		private SharpDX.Color GetColorForNetAskVolume(double netAskVolume)
@@ -357,9 +398,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 		
 		private void PlotStrikeLevels(ChartControl chartControl, ChartScale chartScale)
 		{
-			Print("PlotStrikeLevels called. Strike levels count: " + strikeLevels.Count);
+			Print("KriyaFXOptionsData: PlotStrikeLevels started");
+			Print("Plotting strike levels count: " + strikeLevels.Count);
 
-			if (strikeLevels.Count == 0 || indexStrikes.Count != strikeLevels.Count || netAskVolumes.Count != strikeLevels.Count) return;
+			if (strikeLevels.Count == 0 || indexStrikes.Count != strikeLevels.Count || netAskVolumes.Count != strikeLevels.Count) 
+			{
+				Print("Mismatch in data counts or no strike levels. Returning.");
+				return;
+			}
 
 			float xStart = ChartPanel.X;
 			float xEnd = ChartPanel.X + ChartPanel.W;
@@ -370,8 +416,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				double indexStrike = indexStrikes[i];
 				double netAskVolume = netAskVolumes[i];
 				float y = chartScale.GetYByValue(strikeLevel);
-
-				Print("Plotting strike level: " + strikeLevel + ", Index strike: " + indexStrike + ", Y coordinate: " + y + ", Net Ask Volume: " + netAskVolume);
 
 				SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume);
 
@@ -418,6 +462,43 @@ namespace NinjaTrader.NinjaScript.Indicators
 			Print("PlotStrikeLevels completed");
 		}
 
+		private void DrawExpectedMoveLevel(ChartControl chartControl, ChartScale chartScale, double price, string label)
+		{
+			Print("KriyaFXOptionsData: DrawExpectedMoveLevel started for " + label + " Price: " + price);
+
+			float y = chartScale.GetYByValue(price*ratio); // Added ratio to set the expected move level on the futures chart
+
+			float xStart = ChartPanel.X;
+			float xEnd = ChartPanel.X + ChartPanel.W;
+
+			// Draw the line
+			using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)255, (byte)255, (byte)0, (byte)64))) // Pale yellow with 50% opacity
+			{
+				RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 2);
+			}
+
+			// Draw the rectangle
+			using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)255, (byte)255, (byte)0, (byte)32))) // Pale yellow with 25% opacity
+			{
+				float yTop = chartScale.GetYByValue(price*ratio + 0.25);
+				float yBottom = chartScale.GetYByValue(price*ratio - 0.25);
+				RenderTarget.FillRectangle(new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop), rectangleBrush);
+			}
+
+			// Draw text
+			/*string priceText = label + ": " + Math.Round(price, 2).ToString();
+			using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
+			using (var textLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, priceText, textFormat, float.MaxValue, float.MaxValue))
+			{
+				float textWidth = textLayout.Metrics.Width;
+				float x = (float)ChartPanel.X + (float)ChartPanel.W - textWidth - 5;
+				float yText = y - textLayout.Metrics.Height;
+
+				RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yText), textLayout, textBrush);
+			}
+			*/
+			Print("KriyaFXOptionsData: DrawExpectedMoveLevel completed for " + label);
+		}
 		private string FormatVolume(double volume)
 		{
 			// Convert the volume to hundreds
@@ -425,7 +506,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			string sign = volumeInHundreds < 0 ? "-" : "";
 			return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
 		}
-		
 		private void DrawVolumeTable(ChartControl chartControl)
 		{
 			float tableWidth = 220;
@@ -467,7 +547,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 			string sign = volumeInHundreds < 0 ? "-" : "";
 			return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
 		}
-
 		private string FormatGexVolumeForDisplay(double gexVolume)
 		{
 			// GEX is in billions, so divide by 1 billion to get the number of billions
