@@ -65,7 +65,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double expectedMove;
 		private double expectedMaxPrice;
 		private double expectedMinPrice;
-
+		private bool isLoggedIn = false;
+		private bool isDataFetched = false;
+		private long lastUpdateTimestamp;
+		private string underlyingSymbol;
+		
 		protected override void OnStateChange()
 		{
 			if (State == State.SetDefaults)
@@ -118,7 +122,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private async void Login()
 		{
-			Print("KriyaFXOptionsData: Login started");
 			try
 			{
 				Print("Attempting login...");
@@ -143,25 +146,22 @@ namespace NinjaTrader.NinjaScript.Indicators
 					var tokenObject = jsonSerializer.Deserialize<Dictionary<string, object>>(responseContent);
 					bearerToken = tokenObject["token"].ToString();
 					Print("Login successful. Bearer token received.");
-					Print("KriyaFXOptionsData: Login successful, bearer token received");
+					isLoggedIn = true; 
 					FetchOptionsData();
 				}
 				else
 				{
 					Print("Login failed. Status code: " + response.StatusCode);
-					Print("KriyaFXOptionsData: Login failed. Status code: " + response.StatusCode);
 				}
 			}
 			catch (Exception ex)
 			{
 				Print("Error during login: " + ex.Message);
-				Print("KriyaFXOptionsData: Login Error - " + ex.Message);
 			}
 		}
 
 		private async void FetchOptionsData()
 		{
-			Print("KriyaFXOptionsData: FetchOptionsData started");
 			try
 			{
 				Print("Fetching options data..." + DateTime.Now.ToString("HH:mm:ss"));
@@ -173,29 +173,23 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				if (response.IsSuccessStatusCode)
 				{
-					Print("KriyaFXOptionsData: Options data fetched successfully");
+					Print("Options data fetched successfully");
 					var responseContent = await response.Content.ReadAsStringAsync();
-					Print("Response content length: " + responseContent.Length);
-					Print("Response content (first 500 chars): " + responseContent.Substring(0, Math.Min(500, responseContent.Length)));
+					isDataFetched = true;
 					ProcessOptionsData(responseContent);
 				}
 				else
 				{
 					Print("Failed to fetch options data. Status code: " + response.StatusCode);
-					Print("Response content: " + await response.Content.ReadAsStringAsync());
-					Print("KriyaFXOptionsData: Failed to fetch options data. Status code: " + response.StatusCode);
 				}
 			}
 			catch (Exception ex)
 			{
 				Print("Error fetching options data: " + ex.Message);
-				Print("Stack trace: " + ex.StackTrace);
-				Print("KriyaFXOptionsData: FetchOptionsData Error - " + ex.Message);
 			}
 		}
 		private void ProcessOptionsData(string json)
 		{
-			Print("KriyaFXOptionsData: ProcessOptionsData started");
 			try
 			{
 				Print("Processing options data...");
@@ -204,7 +198,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (!data.ContainsKey("Options"))
 				{
 					Print("Options data not found in the response.");
-					Print("KriyaFXOptionsData: Options data not found in the response");
 					return;
 				}
 
@@ -212,8 +205,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (options == null || !options.ContainsKey("Data"))
 				{
 					Print("Options or Data not found in the response.");
-					Print("KriyaFXOptionsData: Options or Data not found in the response");
 					return;
+				}
+
+				if (options.ContainsKey("Updated"))
+				{
+					lastUpdateTimestamp = Convert.ToInt64(options["Updated"]);
+				}
+
+				if (options.ContainsKey("Symbol"))
+				{
+					underlyingSymbol = options["Symbol"].ToString();
 				}
 
 				if (options.ContainsKey("ExpectedMove"))
@@ -225,8 +227,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					Print("Expected Move: " + expectedMove);
 					Print("Expected Max Price: " + expectedMaxPrice);
 					Print("Expected Min Price: " + expectedMinPrice);
-					Print("KriyaFXOptionsData: Expected move data processed - Index Price: " + indexPrice + ", Expected Move: " + expectedMove);
-					Print("KriyaFXOptionsData: Expected Max Price: " + expectedMaxPrice + ", Expected Min Price: " + expectedMinPrice);
 				}				
 
 				var dataJson = jsonSerializer.Serialize(options["Data"]);
@@ -265,8 +265,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					}
 				}
 
-				Print("Processed strike levels count: " + strikeLevels.Count);
-
 				if (options.ContainsKey("Total_ASK_Volume"))
 				{
 					totalAskVolume = Convert.ToDouble(options["Total_ASK_Volume"]);
@@ -284,7 +282,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{
 						ChartControl.InvalidateVisual();
 						Print("Chart invalidated for redraw");
-						Print("KriyaFXOptionsData: Chart invalidated for redraw");
 					}
 					else
 					{
@@ -295,13 +292,17 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch (Exception ex)
 			{
 				Print("Error processing options data: " + ex.Message);
-				Print("Stack trace: " + ex.StackTrace);
-				Print("KriyaFXOptionsData: ProcessOptionsData Error - " + ex.Message);
 			}
+		}
+
+		private string FormatTimestamp(long unixTimestamp)
+		{
+			DateTimeOffset dateTimeOffset = DateTimeOffset.FromUnixTimeSeconds(unixTimestamp);
+			return dateTimeOffset.LocalDateTime.ToString("dd/MM/yy, HH:mm:ss");
 		}
 		private void OnTimerElapsed(object sender, ElapsedEventArgs e)
 		{
-			Print("KriyaFXOptionsData: Timer elapsed, fetching new data");
+			Print("Timer elapsed, fetching new data");
 			FetchOptionsData();
 		}
 
@@ -338,11 +339,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 		protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
 		{
 			base.OnRender(chartControl, chartScale);
-			Print("KriyaFXOptionsData: OnRender started");
+			Print("OnRender started");
 
 			if (RenderTarget == null || textFormat == null || textBrush == null || strikeLineBrush == null)
 			{
-				Print("KriyaFXOptionsData: OnRender - Essential resources are null");
+				Print("OnRender - Essential resources are null");
 				return;
 			}
 
@@ -364,10 +365,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 			else
 			{
-				Print("KriyaFXOptionsData: Invalid expected max/min prices. Cannot plot expected move levels");
+				Print("Invalid expected max/min prices. Cannot plot expected move levels");
 			}
 
-			Print("KriyaFXOptionsData: OnRender completed");
+			Print("OnRender completed");
 		}
 
 		private SharpDX.Color GetColorForNetAskVolume(double netAskVolume)
@@ -398,8 +399,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		
 		private void PlotStrikeLevels(ChartControl chartControl, ChartScale chartScale)
 		{
-			Print("KriyaFXOptionsData: PlotStrikeLevels started");
-			Print("Plotting strike levels count: " + strikeLevels.Count);
+			Print("PlotStrikeLevels started");
 
 			if (strikeLevels.Count == 0 || indexStrikes.Count != strikeLevels.Count || netAskVolumes.Count != strikeLevels.Count) 
 			{
@@ -422,7 +422,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// Draw the line
 				using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)65, (byte)105, (byte)225, (byte)64))) // Royal Blue with 50% opacity
 				{
-					RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 1);
+					RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 2);
 				}
 
 				// Calculate rectangle coordinates
@@ -464,7 +464,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private void DrawExpectedMoveLevel(ChartControl chartControl, ChartScale chartScale, double price, string label)
 		{
-			Print("KriyaFXOptionsData: DrawExpectedMoveLevel started for " + label + " Price: " + price);
+			Print("DrawExpectedMoveLevel started for " + label + " Price: " + price);
 
 			float y = chartScale.GetYByValue(price*ratio); // Added ratio to set the expected move level on the futures chart
 
@@ -497,7 +497,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yText), textLayout, textBrush);
 			}
 			*/
-			Print("KriyaFXOptionsData: DrawExpectedMoveLevel completed for " + label);
+			Print("DrawExpectedMoveLevel completed for " + label);
 		}
 		private string FormatVolume(double volume)
 		{
@@ -508,11 +508,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 		}
 		private void DrawVolumeTable(ChartControl chartControl)
 		{
-			float tableWidth = 220;
-			float tableHeight = 100;
+			 Print("DrawVolumeTable started");
+			 
+			float tableWidth = 300;
+			float tableHeight = 130;
 			float padding = 10;
 			float labelWidth = 120;
 			float titleHeight = 30;
+			float rowHeight = 30;
 
 			// Use ChartPanel properties for positioning
 			float x = ChartPanel.W - tableWidth - padding;
@@ -524,21 +527,59 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// Draw table border
 			RenderTarget.DrawRectangle(new SharpDX.RectangleF(x, y, tableWidth, tableHeight), tableBorderBrush);
 
-			// Center the title
-			tableTitleFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
-			RenderTarget.DrawText("Volume Summary", tableTitleFormat, new SharpDX.RectangleF(x, y, tableWidth, titleHeight), textBrush);
+			// Prepare the text to display
+			string statusText = null;
+			if (!isLoggedIn)
+			{
+				statusText = "Login failed. Please check your credentials.";
+			}
+			else if (!isDataFetched)
+			{
+				statusText = "Failed to fetch options data. Please check your connection.";
+			}
+			else if (strikeLevels.Count == 0)
+			{
+				statusText = "No options data available.";
+			}
 
-			// Draw table content
-			float contentY = y + titleHeight;
-			float valueX = x + labelWidth;
+			if (statusText != null)
+			{
+				// Draw status message instead of normal content
+				// Center the title
+				tableTitleFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				RenderTarget.DrawText("Status", tableTitleFormat, new SharpDX.RectangleF(x, y, tableWidth, titleHeight), textBrush);
+				RenderTarget.DrawText(statusText, tableContentFormat, new SharpDX.RectangleF(x + 5, y + titleHeight, tableWidth - 10, tableHeight - titleHeight), textBrush);
+			}
+			else
+			{
+				// Draw normal volume table content
+				// Center the title
+				tableTitleFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+				RenderTarget.DrawText("Volume Summary", tableTitleFormat, new SharpDX.RectangleF(x, y, tableWidth, titleHeight), textBrush);
 
-			// Total Ask Volume
-			RenderTarget.DrawText("Total Ask Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY, labelWidth, 25), textBrush);
-			RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY, tableWidth - labelWidth - 5, 25), textBrush);
+				// Draw table content
+				float contentY = y + titleHeight;
+				float valueX = x + labelWidth;
 
-			// Total GEX Volume
-			RenderTarget.DrawText("Total GEX Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 35, labelWidth, 25), textBrush);
-			RenderTarget.DrawText(FormatGexVolumeForDisplay(totalGexVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 35, tableWidth - labelWidth - 5, 25), textBrush);
+				// Underlying Symbol
+				RenderTarget.DrawText("Underlying:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY, labelWidth, rowHeight), textBrush);
+				RenderTarget.DrawText(underlyingSymbol, tableContentFormat, new SharpDX.RectangleF(valueX, contentY, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+				// Last Update Time
+				RenderTarget.DrawText("Last Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 1 * rowHeight, labelWidth, rowHeight), textBrush);
+				RenderTarget.DrawText(FormatTimestamp(lastUpdateTimestamp), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 1 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+				// Total Ask Volume
+				RenderTarget.DrawText("Total Ask Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
+				RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 2 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+				// Total GEX Volume
+				RenderTarget.DrawText("Total GEX Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
+				RenderTarget.DrawText(FormatGexVolumeForDisplay(totalGexVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+				}
+
+			Print("DrawVolumeTable completed");
 		}
 		private string FormatVolumeForDisplay(double volume)
 		{
