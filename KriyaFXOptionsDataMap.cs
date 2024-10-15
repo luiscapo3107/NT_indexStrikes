@@ -22,21 +22,22 @@ using NinjaTrader.NinjaScript.DrawingTools;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Web.Script.Serialization; // For JavaScriptSerializer
-using System.Timers;
 using SharpDX;
 using SharpDX.Direct2D1;
 using SharpDX.DirectWrite;
+using System.Net.WebSockets;
+using System.Threading;
+using System.IO;
 #endregion
 
 //This namespace holds Indicators in this folder and is required. Do not change it. 
 namespace NinjaTrader.NinjaScript.Indicators
 {
-	public class KriyaFXOptionsData : Indicator
+	public class KriyaFXOptionsMap : Indicator
 	{
 		private HttpClient httpClient;
 		private string bearerToken;
 		private JavaScriptSerializer jsonSerializer;
-		private Timer updateTimer;
 		private List<double> strikeLevels = new List<double>();
 		private List<double> indexStrikes = new List<double>();
 		private double currentPrice;
@@ -70,57 +71,103 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private long lastUpdateTimestamp;
 		private string underlyingSymbol;
 		
+		private ClientWebSocket webSocket;
+		private CancellationTokenSource cts;
+		private string authToken;
+
+		private List<string> messageChunks = new List<string>();
+
 		protected override void OnStateChange()
 		{
-			if (State == State.SetDefaults)
+			try
 			{
-				Description									= @"Retrieves and plots Options Data from the KriyaFX service";
-				Name										= "KriyaFXOptionsData";
-				Calculate									= Calculate.OnBarClose;
-				IsOverlay									= true;
-				DisplayInDataBox							= true;
-				DrawOnPricePanel							= true;
-				DrawHorizontalGridLines						= true;
-				DrawVerticalGridLines						= true;
-				PaintPriceMarkers							= true;
-				ScaleJustification							= NinjaTrader.Gui.Chart.ScaleJustification.Right;
-				IsSuspendedWhileInactive				= true;
-				Username				= string.Empty;
-				Password					= string.Empty;
-				Print("KriyaFXOptionsData: SetDefaults completed");
-			}
-			else if (State == State.Configure)
-			{
-				httpClient = new HttpClient();
-				jsonSerializer = new JavaScriptSerializer();
-				updateTimer = new Timer(10000); // 10 seconds
-				updateTimer.Elapsed += OnTimerElapsed;
-				updateTimer.AutoReset = true;
-				Print("KriyaFXOptionsData: Configure completed");
-			}
-			else if (State == State.DataLoaded)
-			{
-				updateTimer.Start();
-				Login();
-				Print("KriyaFXOptionsData: DataLoaded - Timer started and Login initiated");
-			}
-			else if (State == State.Terminated)
-			{
-				if (httpClient != null)
-					httpClient.Dispose();
-				if (updateTimer != null)
+				if (State == State.SetDefaults)
 				{
-					updateTimer.Stop();
-					updateTimer.Dispose();
+					Description									= @"Retrieves and plots Options Data from the KriyaFX service";
+					Name										= "KriyaFXOptionsMap";
+					Calculate									= Calculate.OnBarClose;
+					IsOverlay									= true;
+					DisplayInDataBox							= true;
+					DrawOnPricePanel							= true;
+					DrawHorizontalGridLines						= true;
+					DrawVerticalGridLines						= true;
+					PaintPriceMarkers							= true;
+					ScaleJustification							= NinjaTrader.Gui.Chart.ScaleJustification.Right;
+					IsSuspendedWhileInactive				= true;
+					Username				= string.Empty;
+					Password					= string.Empty;
+					WebSocketUrl = "ws://localhost:3000";
+					Print("KriyaFXOptionsMap: SetDefaults completed");
 				}
-				DisposeSharpDXResources();
-				Print("KriyaFXOptionsData: Terminated - Resources disposed");
+				else if (State == State.Configure)
+				{
+					httpClient = new HttpClient();
+					jsonSerializer = new JavaScriptSerializer();
+					webSocket = new ClientWebSocket();
+					cts = new CancellationTokenSource();
+					Print("KriyaFXOptionsMap: Configure completed");
+				}
+				else if (State == State.DataLoaded)
+				{
+					Print("KriyaFXOptionsMap: DataLoaded - Initiating login");
+					// Only initiate login here, not WebSocket connection
+					Task.Run(async () =>
+					{
+						try
+						{
+							await Login();
+						}
+						catch (Exception ex)
+						{
+							Print("Error in Login: " + ex.Message);
+						}
+					}).Wait();
+					Print("KriyaFXOptionsMap: DataLoaded - Login initiated");
+				}
+				else if (State == State.Historical)
+				{
+					Print("KriyaFXOptionsMap: Historical state reached");
+				}
+				else if (State == State.Realtime)
+				{
+					Print("KriyaFXOptionsMap: Realtime state reached - Initiating WebSocket connection");
+					// Initiate WebSocket connection here
+					Task.Run(async () =>
+					{
+						try
+						{
+							await ConnectWebSocket();
+						}
+						catch (Exception ex)
+						{
+							Print("Error in ConnectWebSocket: " + ex.Message);
+						}
+					}).Wait();
+				}
+				else if (State == State.Terminated)
+				{
+					if (httpClient != null)
+					{
+						httpClient.Dispose();
+					}
+					DisposeSharpDXResources();
+					DisconnectWebSocket();
+					Print("KriyaFXOptionsMap: Terminated - Resources disposed");
+				}
+			}
+			catch (Exception ex)
+			{
+				Print("Error in OnStateChange: " + ex.Message);
+				if (ex.InnerException != null)
+				{
+					Print("Inner Exception: " + ex.InnerException.Message);
+				}
 			}
 		}
 
 		protected override void OnBarUpdate() { }
 
-		private async void Login()
+		private async Task<bool> Login()
 		{
 			try
 			{
@@ -146,48 +193,44 @@ namespace NinjaTrader.NinjaScript.Indicators
 					var tokenObject = jsonSerializer.Deserialize<Dictionary<string, object>>(responseContent);
 					bearerToken = tokenObject["token"].ToString();
 					Print("Login successful. Bearer token received.");
-					isLoggedIn = true; 
-					FetchOptionsData();
+					return true;
 				}
 				else
 				{
 					Print("Login failed. Status code: " + response.StatusCode);
+					return false;
 				}
 			}
 			catch (Exception ex)
 			{
 				Print("Error during login: " + ex.Message);
+				return false;
 			}
 		}
 
-		private async void FetchOptionsData()
+		private async Task InitializeConnectionAsync()
 		{
 			try
 			{
-				Print("Fetching options data..." + DateTime.Now.ToString("HH:mm:ss"));
-				var request = new HttpRequestMessage(HttpMethod.Get, "https://kriyafx.de/api/options-chain?latest");
-				request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", bearerToken);
-
-				var response = await httpClient.SendAsync(request);
-				Print("Response status code: " + response.StatusCode);
-
-				if (response.IsSuccessStatusCode)
+				if (await Login())
 				{
-					Print("Options data fetched successfully");
-					var responseContent = await response.Content.ReadAsStringAsync();
-					isDataFetched = true;
-					ProcessOptionsData(responseContent);
+					await ConnectWebSocket();
 				}
 				else
 				{
-					Print("Failed to fetch options data. Status code: " + response.StatusCode);
+					Print("Failed to login. WebSocket connection not established.");
 				}
 			}
 			catch (Exception ex)
 			{
-				Print("Error fetching options data: " + ex.Message);
+				Print("Error in InitializeConnectionAsync: " + ex.Message);
+				if (ex.InnerException != null)
+				{
+					Print("Inner Exception: " + ex.InnerException.Message);
+				}
 			}
 		}
+
 		private void ProcessOptionsData(string json)
 		{
 			try
@@ -299,11 +342,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			DateTimeOffset dateTimeOffset = DateTimeOffset.FromUnixTimeSeconds(unixTimestamp);
 			return dateTimeOffset.LocalDateTime.ToString("dd/MM/yy, HH:mm:ss");
-		}
-		private void OnTimerElapsed(object sender, ElapsedEventArgs e)
-		{
-			Print("Timer elapsed, fetching new data");
-			FetchOptionsData();
 		}
 
 		public override void OnRenderTargetChanged()
@@ -596,6 +634,149 @@ namespace NinjaTrader.NinjaScript.Indicators
 			return sign + "$" + String.Format("{0:F3}", Math.Abs(gexInBillions)) + " Bn";
 		}
 		
+		private async Task ConnectWebSocket()
+		{
+			int maxRetries = 3;
+			int retryDelay = 5000; // 5 seconds
+
+			for (int i = 0; i < maxRetries; i++)
+			{
+				if (string.IsNullOrEmpty(bearerToken))
+				{
+					Print("Bearer token is not set. Cannot connect to WebSocket.");
+					return;
+				}
+
+				Print("Attempting WebSocket connection (attempt " + (i + 1) + " of " + maxRetries + ")");
+				try
+				{
+					var wsUri = new Uri(WebSocketUrl + "?token=" + bearerToken);
+					await webSocket.ConnectAsync(wsUri, cts.Token);
+					Print("WebSocket connection established");
+					Task.Run(() => ReceiveWebSocketMessages());
+					return;
+				}
+				catch (Exception ex)
+				{
+					Print("WebSocket connection attempt " + (i + 1) + " failed: " + ex.Message);
+				}
+
+				if (i < maxRetries - 1)
+				{
+					Print("Retrying in " + (retryDelay / 1000) + " seconds...");
+					await Task.Delay(retryDelay);
+				}
+				else
+				{
+					Print("Max retries reached. " + "WebSocket connection failed.");
+				}
+			}
+		}
+
+		private async Task ReceiveWebSocketMessages()
+		{
+			var buffer = new byte[1024 * 4];
+			while (webSocket.State == WebSocketState.Open)
+			{
+				WebSocketReceiveResult result;
+				using (var ms = new MemoryStream())
+				{
+					do
+					{
+						result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cts.Token);
+						ms.Write(buffer, 0, result.Count);
+					}
+					while (!result.EndOfMessage);
+
+					ms.Seek(0, SeekOrigin.Begin);
+					using (var reader = new StreamReader(ms, Encoding.UTF8))
+					{
+						string message = await reader.ReadToEndAsync();
+						ProcessWebSocketMessage(message);
+					}
+				}
+
+				if (result.MessageType == WebSocketMessageType.Close)
+				{
+					await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, cts.Token);
+					Print("WebSocket connection closed");
+					return;
+				}
+			}
+		}
+
+		private void ProcessWebSocketMessage(string message)
+		{
+			try
+			{
+				var data = jsonSerializer.Deserialize<Dictionary<string, object>>(message);
+				if (data.ContainsKey("type") && data["type"].ToString() == "chunk")
+				{
+					int chunkIndex = Convert.ToInt32(data["chunkIndex"]);
+					int totalChunks = Convert.ToInt32(data["totalChunks"]);
+					string chunkData = data["data"].ToString();
+
+					// Ensure the messageChunks list has enough capacity
+					while (messageChunks.Count <= chunkIndex)
+					{
+						messageChunks.Add(null);
+					}
+
+					messageChunks[chunkIndex] = chunkData;
+
+					if (messageChunks.Count(chunk => chunk != null) == totalChunks)
+					{
+						string fullMessage = string.Join("", messageChunks);
+						messageChunks.Clear(); // Reset for next message
+
+						ProcessReassembledMessage(fullMessage);
+					}
+				}
+				else
+				{
+					// Handle other message types if any
+					Print("Received non-chunk message: " + message);
+					ProcessReassembledMessage(message);
+				}
+			}
+			catch (Exception ex)
+			{
+				Print("Error processing WebSocket message: " + ex.Message);
+			}
+		}
+
+		private void ProcessReassembledMessage(string fullMessage)
+		{
+			try
+			{
+				var data = jsonSerializer.Deserialize<Dictionary<string, object>>(fullMessage);
+				if (data.ContainsKey("type") && data["type"].ToString() == "update")
+				{
+					Print("Received new options chain data");
+					if (data.ContainsKey("data"))
+					{
+						var optionsData = jsonSerializer.Serialize(data["data"]);
+						ProcessOptionsData(optionsData);
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Print("Error processing reassembled message: " + ex.Message);
+			}
+		}
+
+		private void DisconnectWebSocket()
+		{
+			cts.Cancel();
+			if (webSocket.State == WebSocketState.Open)
+			{
+				webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, CancellationToken.None).Wait();
+			}
+			webSocket.Dispose();
+			cts.Dispose();
+		}
+
 		#region Properties
 		[NinjaScriptProperty]
 		[Display(Name="Username", Description="User Name for KriyaFX service", Order=1, GroupName="Parameters")]
@@ -606,6 +787,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 		[Display(Name="Password", Description="Password for KriyaFX Service", Order=2, GroupName="Parameters")]
 		public string Password
 		{ get; set; }
+
+		[NinjaScriptProperty]
+		[Display(Name="WebSocket URL", Description="URL for the WebSocket server", Order=3, GroupName="Parameters")]
+		public string WebSocketUrl { get; set; }
 		#endregion
 
 	}
@@ -617,19 +802,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
-		private KriyaFXOptionsData[] cacheKriyaFXOptionsData;
-		public KriyaFXOptionsData KriyaFXOptionsData(string username, string password)
+		private KriyaFXOptionsMap[] cacheKriyaFXOptionsMap;
+		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password)
 		{
-			return KriyaFXOptionsData(Input, username, password);
+			return KriyaFXOptionsMap(Input, username, password);
 		}
 
-		public KriyaFXOptionsData KriyaFXOptionsData(ISeries<double> input, string username, string password)
+		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password)
 		{
-			if (cacheKriyaFXOptionsData != null)
-				for (int idx = 0; idx < cacheKriyaFXOptionsData.Length; idx++)
-					if (cacheKriyaFXOptionsData[idx] != null && cacheKriyaFXOptionsData[idx].Username == username && cacheKriyaFXOptionsData[idx].Password == password && cacheKriyaFXOptionsData[idx].EqualsInput(input))
-						return cacheKriyaFXOptionsData[idx];
-			return CacheIndicator<KriyaFXOptionsData>(new KriyaFXOptionsData(){ Username = username, Password = password }, input, ref cacheKriyaFXOptionsData);
+			if (cacheKriyaFXOptionsMap != null)
+				for (int idx = 0; idx < cacheKriyaFXOptionsMap.Length; idx++)
+					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
+						return cacheKriyaFXOptionsMap[idx];
+			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password }, input, ref cacheKriyaFXOptionsMap);
 		}
 	}
 }
@@ -638,14 +823,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.KriyaFXOptionsData KriyaFXOptionsData(string username, string password)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password)
 		{
-			return indicator.KriyaFXOptionsData(Input, username, password);
+			return indicator.KriyaFXOptionsMap(Input, username, password);
 		}
 
-		public Indicators.KriyaFXOptionsData KriyaFXOptionsData(ISeries<double> input , string username, string password)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password)
 		{
-			return indicator.KriyaFXOptionsData(input, username, password);
+			return indicator.KriyaFXOptionsMap(input, username, password);
 		}
 	}
 }
@@ -654,14 +839,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.KriyaFXOptionsData KriyaFXOptionsData(string username, string password)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password)
 		{
-			return indicator.KriyaFXOptionsData(Input, username, password);
+			return indicator.KriyaFXOptionsMap(Input, username, password);
 		}
 
-		public Indicators.KriyaFXOptionsData KriyaFXOptionsData(ISeries<double> input , string username, string password)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password)
 		{
-			return indicator.KriyaFXOptionsData(input, username, password);
+			return indicator.KriyaFXOptionsMap(input, username, password);
 		}
 	}
 }

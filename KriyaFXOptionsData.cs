@@ -515,7 +515,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float padding = 10;
 			float labelWidth = 120;
 			float titleHeight = 30;
-			float rowHeight = 30;
+			float rowHeight = 20;
 
 			// Use ChartPanel properties for positioning
 			float x = ChartPanel.W - tableWidth - padding;
@@ -561,7 +561,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				float contentY = y + titleHeight;
 				float valueX = x + labelWidth;
 
-				// Underlying Symbol
+								// Underlying Symbol
 				RenderTarget.DrawText("Underlying:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY, labelWidth, rowHeight), textBrush);
 				RenderTarget.DrawText(underlyingSymbol, tableContentFormat, new SharpDX.RectangleF(valueX, contentY, tableWidth - labelWidth - 5, rowHeight), textBrush);
 
@@ -576,8 +576,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				// Total GEX Volume
 				RenderTarget.DrawText("Total GEX Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
 				RenderTarget.DrawText(FormatGexVolumeForDisplay(totalGexVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
-
-				}
+			}
 
 			Print("DrawVolumeTable completed");
 		}
@@ -666,5 +665,4 @@ namespace NinjaTrader.NinjaScript.Strategies
 	}
 }
 
-#endregion
 #endregion
