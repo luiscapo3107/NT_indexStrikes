@@ -55,6 +55,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private double ratio;
 
 		private List<double> netAskVolumes = new List<double>();
+		private List<double> callAskVolumes = new List<double>();
+		private List<double> putAskVolumes = new List<double>();
 
 		private double totalAskVolume;
 		private double totalGexVolume;
@@ -76,6 +78,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 		private string authToken;
 
 		private List<string> messageChunks = new List<string>();
+
+		private bool isRatioCalculated = false;
+		private double fixedRatio;
 
 		protected override void OnStateChange()
 		{
@@ -192,11 +197,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 					var responseContent = await response.Content.ReadAsStringAsync();
 					var tokenObject = jsonSerializer.Deserialize<Dictionary<string, object>>(responseContent);
 					bearerToken = tokenObject["token"].ToString();
+					isLoggedIn = true;	
 					Print("Login successful. Bearer token received.");
 					return true;
 				}
 				else
 				{
+					isLoggedIn = false;
 					Print("Login failed. Status code: " + response.StatusCode);
 					return false;
 				}
@@ -204,6 +211,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch (Exception ex)
 			{
 				Print("Error during login: " + ex.Message);
+				isLoggedIn = false;
 				return false;
 			}
 		}
@@ -231,6 +239,36 @@ namespace NinjaTrader.NinjaScript.Indicators
 			}
 		}
 
+		private double GetFuturePriceAtTimestamp(long timestamp)
+		{
+			// Convert Unix timestamp to DateTime
+			var barTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(timestamp).ToLocalTime();
+			Print("Bar time: " + barTime.ToString("yyyy-MM-dd HH:mm:ss"));
+			// Get the bar index for the specified time
+			int barIndex = BarsArray[0].GetBar(barTime);
+
+			if (barIndex >= 0)
+			{
+				// Return the ask price of the bar
+				return Bars.GetAsk(barIndex);
+			}
+			else
+			{
+				// If no exact match is found, manually search for the closest bar before the specified time
+				for (int i = BarsArray[0].Count - 1; i >= 0; i--)
+				{
+					if (BarsArray[0].GetTime(i) <= barTime)
+					{
+						return Bars.GetAsk(i);
+					}
+				}
+
+				// If still no match, return the current ask price as a fallback
+				Print("No historical data found for the specified timestamp. Using current ask price.");
+				return GetCurrentAsk();
+			}
+		}
+
 		private void ProcessOptionsData(string json)
 		{
 			try
@@ -241,6 +279,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (!data.ContainsKey("Options"))
 				{
 					Print("Options data not found in the response.");
+					isDataFetched = false;	
 					return;
 				}
 
@@ -248,6 +287,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 				if (options == null || !options.ContainsKey("Data"))
 				{
 					Print("Options or Data not found in the response.");
+					isDataFetched = false;	
 					return;
 				}
 
@@ -280,32 +320,69 @@ namespace NinjaTrader.NinjaScript.Indicators
 				strikeLevels.Clear();
 				indexStrikes.Clear();
 				netAskVolumes.Clear();
+				callAskVolumes.Clear();
+				putAskVolumes.Clear();	
 
-				// Calculate future price and ratio
-				futurePrice = GetCurrentAsk() - TickSize;
-				indexPrice = Convert.ToDouble(data["Price"]);
-				ratio = futurePrice / indexPrice;
+				// Calculate future price and ratio only if not already calculated
+				if (!isRatioCalculated)
+				{
+					futurePrice = GetFuturePriceAtTimestamp(lastUpdateTimestamp);
+					var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
+					Print("Timestamp for Future Price Calculation: " + dateTime.ToString("yyyy-MM-dd HH:mm:ss"));
+					indexPrice = Convert.ToDouble(data["Price"]);
+					fixedRatio = futurePrice / indexPrice;
+					isRatioCalculated = true;
+
+					Print("Initial Future Price (at timestamp): " + futurePrice);
+					Print("Initial Index Price: " + indexPrice);
+					Print("Fixed Index to Futures Ratio: " + fixedRatio);
+				}
+				else
+				{
+					// Use the fixed ratio for calculations, but update the index price
+					indexPrice = Convert.ToDouble(data["Price"]);
+					futurePrice = indexPrice * fixedRatio;
+
+					Print("Updated Index Price: " + indexPrice);
+					Print("Calculated Future Price: " + futurePrice);
+				}
+
 				double roundedIndexStrike = Math.Floor(indexPrice);
-
-				Print("Future Price: " + futurePrice);
-				Print("Index Price: " + indexPrice);
-				Print("Index to Futures Ratio: " + ratio);
 
 				foreach (var item in optionsData)
 				{
 				
-					if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume"))
+					if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume")&& 
+                item.ContainsKey("call") && item.ContainsKey("put"))
 					{
 						double indexStrike = Convert.ToDouble(item["strike"]);
-						double futureStrike = indexStrike * ratio;
+						double futureStrike = indexStrike * fixedRatio;  // Use fixedRatio here
 						double netAskVolume = Convert.ToDouble(item["Net_ASK_Volume"]);
+						var call = item["call"] as Dictionary<string, object>;
+						var put = item["put"] as Dictionary<string, object>;
+
+						double callAskVolume = 0;
+						double putAskVolume = 0;
+
+						if (call.ContainsKey("askvolume"))
+						{
+							callAskVolumes.Add(Convert.ToDouble(call["askvolume"]));
+						}
+						if (put.ContainsKey("askvolume"))
+						{
+							putAskVolumes.Add(Convert.ToDouble(put["askvolume"]));
+						}
 
 						indexStrikes.Add(indexStrike);
 						strikeLevels.Add(futureStrike);
 						netAskVolumes.Add(netAskVolume);
+						callAskVolumes.Add(callAskVolume);
+						putAskVolumes.Add(putAskVolume);
 
-						Print("Added index strike: " + indexStrike + ", future strike: " + futureStrike + ", Net Ask Volume: " + netAskVolume);
-					}
+                		Print("Added index strike: " + indexStrike + ", future strike: " + futureStrike + 
+						", Net Ask Volume: " + netAskVolume + 
+						", Call Ask Volume: " + callAskVolume + 
+						", Put Ask Volume: " + putAskVolume);					}
 				}
 
 				if (options.ContainsKey("Total_ASK_Volume"))
@@ -317,6 +394,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
 				}
 
+				isDataFetched = true;	
 				// Use Dispatcher to update the UI
 				Dispatcher.InvokeAsync(() =>
 				{
@@ -335,6 +413,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			catch (Exception ex)
 			{
 				Print("Error processing options data: " + ex.Message);
+				isDataFetched = false;		
 			}
 		}
 
@@ -478,6 +557,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 				// Draw text
 				string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
+				string callText = "$$ Call: " + FormatVolume(callAskVolumes[i]);
+				string putText = "$$ Put: " + FormatVolume(putAskVolumes[i]);
 				string volumeText = "Net Ask Vol: " + FormatVolume(netAskVolume);
 
 				using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
@@ -553,7 +634,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 			float padding = 10;
 			float labelWidth = 120;
 			float titleHeight = 30;
-			float rowHeight = 30;
+			float rowHeight = 20;
 
 			// Use ChartPanel properties for positioning
 			float x = ChartPanel.W - tableWidth - padding;
