@@ -52,7 +52,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private double futurePrice;
 		private double indexPrice;
-		private double ratio;
 
 		private List<double> netAskVolumes = new List<double>();
 		private List<double> callAskVolumes = new List<double>();
@@ -81,6 +80,9 @@ namespace NinjaTrader.NinjaScript.Indicators
 
 		private bool isRatioCalculated = false;
 		private double fixedRatio;
+		private bool isExpectedMoveLevelsCalculated = false;
+		private double fixedExpectedMaxPrice;
+		private double fixedExpectedMinPrice;
 
 		protected override void OnStateChange()
 		{
@@ -243,7 +245,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			// Convert Unix timestamp to DateTime
 			var barTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(timestamp).ToLocalTime();
-			Print("Bar time: " + barTime.ToString("yyyy-MM-dd HH:mm:ss"));
+			
 			// Get the bar index for the specified time
 			int barIndex = BarsArray[0].GetBar(barTime);
 
@@ -301,34 +303,12 @@ namespace NinjaTrader.NinjaScript.Indicators
 					underlyingSymbol = options["Symbol"].ToString();
 				}
 
-				if (options.ContainsKey("ExpectedMove"))
-				{
-					expectedMove = Convert.ToDouble(options["ExpectedMove"]);
-					indexPrice = Convert.ToDouble(data["Price"]);
-					expectedMaxPrice = indexPrice + expectedMove;
-					expectedMinPrice = indexPrice - expectedMove;
-					Print("Expected Move: " + expectedMove);
-					Print("Expected Max Price: " + expectedMaxPrice);
-					Print("Expected Min Price: " + expectedMinPrice);
-				}				
-
-				var dataJson = jsonSerializer.Serialize(options["Data"]);
-				var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
-
-				Print("Options Data count: " + optionsData.Count);
-
-				strikeLevels.Clear();
-				indexStrikes.Clear();
-				netAskVolumes.Clear();
-				callAskVolumes.Clear();
-				putAskVolumes.Clear();	
-
 				// Calculate future price and ratio only if not already calculated
 				if (!isRatioCalculated)
 				{
 					futurePrice = GetFuturePriceAtTimestamp(lastUpdateTimestamp);
 					var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
-					Print("Timestamp for Future Price Calculation: " + dateTime.ToString("yyyy-MM-dd HH:mm:ss"));
+
 					indexPrice = Convert.ToDouble(data["Price"]);
 					fixedRatio = futurePrice / indexPrice;
 					isRatioCalculated = true;
@@ -342,12 +322,32 @@ namespace NinjaTrader.NinjaScript.Indicators
 					// Use the fixed ratio for calculations, but update the index price
 					indexPrice = Convert.ToDouble(data["Price"]);
 					futurePrice = indexPrice * fixedRatio;
-
-					Print("Updated Index Price: " + indexPrice);
-					Print("Calculated Future Price: " + futurePrice);
 				}
 
 				double roundedIndexStrike = Math.Floor(indexPrice);
+				if (options.ContainsKey("ExpectedMove"))
+				{
+					expectedMove = Convert.ToDouble(options["ExpectedMove"]);
+					
+					indexPrice = Convert.ToDouble(data["Price"]);
+			
+					if (!isExpectedMoveLevelsCalculated)
+					{		
+						fixedExpectedMaxPrice = (indexPrice + expectedMove) * fixedRatio;
+						fixedExpectedMinPrice = (indexPrice - expectedMove) * fixedRatio;
+						isExpectedMoveLevelsCalculated = true;
+
+					}
+				}				
+
+				var dataJson = jsonSerializer.Serialize(options["Data"]);
+				var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
+
+				strikeLevels.Clear();
+				indexStrikes.Clear();
+				netAskVolumes.Clear();
+				callAskVolumes.Clear();
+				putAskVolumes.Clear();	
 
 				foreach (var item in optionsData)
 				{
@@ -378,11 +378,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 						netAskVolumes.Add(netAskVolume);
 						callAskVolumes.Add(callAskVolume);
 						putAskVolumes.Add(putAskVolume);
-
-                		Print("Added index strike: " + indexStrike + ", future strike: " + futureStrike + 
-						", Net Ask Volume: " + netAskVolume + 
-						", Call Ask Volume: " + callAskVolume + 
-						", Put Ask Volume: " + putAskVolume);					}
+					}
 				}
 
 				if (options.ContainsKey("Total_ASK_Volume"))
@@ -473,16 +469,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// Draw Expected Move levels
 			Print("Calling ExpectedMoveLevels");
 
-			if (expectedMaxPrice > 0 && expectedMinPrice > 0)
+			if (isExpectedMoveLevelsCalculated)
 			{
-				Print("Expected Max Price: " + expectedMaxPrice);
-				Print("Expected Min Price: " + expectedMinPrice);
-				DrawExpectedMoveLevel(chartControl, chartScale, expectedMaxPrice, "Expected Max Price");
-				DrawExpectedMoveLevel(chartControl, chartScale, expectedMinPrice, "Expected Min Price");
+				DrawExpectedMoveLevel(chartControl, chartScale, fixedExpectedMaxPrice, "Expected Max Price");
+				DrawExpectedMoveLevel(chartControl, chartScale, fixedExpectedMinPrice, "Expected Min Price");
 			}
 			else
 			{
-				Print("Invalid expected max/min prices. Cannot plot expected move levels");
+				Print("Expected move levels not yet calculated");
 			}
 
 			Print("OnRender completed");
@@ -585,7 +579,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			Print("DrawExpectedMoveLevel started for " + label + " Price: " + price);
 
-			float y = chartScale.GetYByValue(price*ratio); // Added ratio to set the expected move level on the futures chart
+			float y = chartScale.GetYByValue(price); 
 
 			float xStart = ChartPanel.X;
 			float xEnd = ChartPanel.X + ChartPanel.W;
@@ -599,8 +593,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 			// Draw the rectangle
 			using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)255, (byte)255, (byte)0, (byte)32))) // Pale yellow with 25% opacity
 			{
-				float yTop = chartScale.GetYByValue(price*ratio + 0.25);
-				float yBottom = chartScale.GetYByValue(price*ratio - 0.25);
+				float yTop = chartScale.GetYByValue(price + 0.25);
+				float yBottom = chartScale.GetYByValue(price - 0.25);
 				RenderTarget.FillRectangle(new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop), rectangleBrush);
 			}
 
