@@ -325,9 +325,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 				}
 
 				double roundedIndexStrike = Math.Floor(indexPrice);
-				if (options.ContainsKey("ExpectedMove"))
+			
+				if (data.ContainsKey("ExpectedMove"))
 				{
-					expectedMove = Convert.ToDouble(options["ExpectedMove"]);
+					expectedMove = Convert.ToDouble(data["ExpectedMove"]);
 					
 					indexPrice = Convert.ToDouble(data["Price"]);
 			
@@ -335,6 +336,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 					{		
 						fixedExpectedMaxPrice = (indexPrice + expectedMove) * fixedRatio;
 						fixedExpectedMinPrice = (indexPrice - expectedMove) * fixedRatio;
+
 						isExpectedMoveLevelsCalculated = true;
 
 					}
