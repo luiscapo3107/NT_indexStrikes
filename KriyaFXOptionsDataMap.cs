@@ -392,21 +392,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 					totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
 				}
 
-				isDataFetched = true;	
-				// Use Dispatcher to update the UI
-				Dispatcher.InvokeAsync(() =>
+				isDataFetched = true;
+
+				// Invalidate the chart to trigger a redraw
+				if (ChartControl != null)
 				{
-					// Invalidate the chart to trigger OnRender
-					if (ChartControl != null)
+					ChartControl.Dispatcher.InvokeAsync(() =>
 					{
 						ChartControl.InvalidateVisual();
-						Print("Chart invalidated for redraw");
-					}
-					else
-					{
-						Print("ChartControl is null");
-					}
-				});
+						Print("[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] Chart invalidated for redraw");
+					});
+				}
+				else
+				{
+					Print("ChartControl is null, cannot invalidate");
+				}
 			}
 			catch (Exception ex)
 			{
@@ -826,10 +826,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 		{
 			try
 			{
+				string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+				Print("[" + timestamp + "] Received new message");
+
 				var data = jsonSerializer.Deserialize<Dictionary<string, object>>(fullMessage);
 				if (data.ContainsKey("type") && data["type"].ToString() == "update")
 				{
-					Print("Received new options chain data");
+					Print("[" + timestamp + "] Received new options chain data");
 					if (data.ContainsKey("data"))
 					{
 						var optionsData = jsonSerializer.Serialize(data["data"]);
