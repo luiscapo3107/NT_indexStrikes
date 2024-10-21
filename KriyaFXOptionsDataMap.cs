@@ -112,6 +112,19 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double previousTotalVelocity = 0;
         private long previousTotalVelocityTimestamp = 0;
 
+        // Dictionaries to store EMA values per strike
+        private Dictionary<double, double> emaVelocity = new Dictionary<double, double>();
+        private Dictionary<double, double> emaAcceleration = new Dictionary<double, double>();
+
+        // Variables for EMA of total velocity and acceleration
+        private double emaTotalVelocity = 0;
+        private double emaTotalAcceleration = 0;
+        private bool isTotalVelocityInitialized = false;
+        private bool isTotalAccelerationInitialized = false;
+
+        // Smoothing factor for EMA
+        private double smoothingFactor = 0.4; // Adjust between 0 and 1 as needed
+
         protected override void OnStateChange()
         {
             try
@@ -305,7 +318,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 Print("Processing options data...");
                 var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
-                
+
                 if (!data.ContainsKey("Options"))
                 {
                     Print("Options data not found in the response.");
@@ -443,11 +456,39 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 }
                             }
 
+                            // Apply EMA to Velocity
+                            double smoothedVelocity = velocity;
+                            if (emaVelocity.ContainsKey(futureStrike))
+                            {
+                                double previousEmaVelocity = emaVelocity[futureStrike];
+                                smoothedVelocity = (velocity * smoothingFactor) + (previousEmaVelocity * (1 - smoothingFactor));
+                            }
+                            else
+                            {
+                                // First time, initialize EMA with the current velocity
+                                smoothedVelocity = velocity;
+                            }
+                            emaVelocity[futureStrike] = smoothedVelocity;
+
+                            // Apply EMA to Acceleration
+                            double smoothedAcceleration = acceleration;
+                            if (emaAcceleration.ContainsKey(futureStrike))
+                            {
+                                double previousEmaAcceleration = emaAcceleration[futureStrike];
+                                smoothedAcceleration = (acceleration * smoothingFactor) + (previousEmaAcceleration * (1 - smoothingFactor));
+                            }
+                            else
+                            {
+                                // First time, initialize EMA with the current acceleration
+                                smoothedAcceleration = acceleration;
+                            }
+                            emaAcceleration[futureStrike] = smoothedAcceleration;
+
                             // Print updated velocity and acceleration
-                            Print("Strike: " + futureStrike + 
-                                  " | Timestamp: " + lastUpdateTimestamp + 
-                                  " | Velocity: " + velocity + 
-                                  " | Acceleration: " + acceleration);
+                            Print("Strike: " + futureStrike +
+                                  " | Timestamp: " + lastUpdateTimestamp +
+                                  " | Smoothed Velocity: " + smoothedVelocity +
+                                  " | Smoothed Acceleration: " + smoothedAcceleration);
 
                             // Update the dictionaries with current values
                             previousNetAskVolumeData[futureStrike] = new NetAskVolumeData
@@ -458,8 +499,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 VelocityTimestamp = lastUpdateTimestamp
                             };
 
-                            velocitiesList.Add(velocity);
-                            accelerationsList.Add(acceleration);
+                            velocitiesList.Add(smoothedVelocity);
+                            accelerationsList.Add(smoothedAcceleration);
 
                             // Existing code to populate lists
                             indexStrikes.Add(indexStrike);
@@ -470,46 +511,95 @@ namespace NinjaTrader.NinjaScript.Indicators
                         }
                     }
 
+                    // --- Adjusted Code for Total Velocity and Acceleration ---
                     if (options.ContainsKey("Total_ASK_Volume"))
                     {
                         totalAskVolume = Convert.ToDouble(options["Total_ASK_Volume"]);
 
-                        // Compute Total Velocity and Total Acceleration only if the timestamp has changed
-                        if (previousTotalAskVolumeTimestamp > 0 && lastUpdateTimestamp > previousTotalAskVolumeTimestamp)
+                        if (previousTotalAskVolumeTimestamp == 0)
+                        {
+                            // First time, initialize previous values
+                            previousTotalAskVolume = totalAskVolume;
+                            previousTotalAskVolumeTimestamp = lastUpdateTimestamp;
+
+                            totalVelocity = 0;
+                            totalAcceleration = 0;
+
+                            previousTotalVelocity = 0;
+                            previousTotalVelocityTimestamp = lastUpdateTimestamp;
+
+                            // Initialize EMA
+                            emaTotalVelocity = 0;
+                            emaTotalAcceleration = 0;
+                            isTotalVelocityInitialized = true;
+                            isTotalAccelerationInitialized = true;
+                        }
+                        else if (lastUpdateTimestamp > previousTotalAskVolumeTimestamp)
                         {
                             double deltaV = totalAskVolume - previousTotalAskVolume;
                             double deltaT = lastUpdateTimestamp - previousTotalAskVolumeTimestamp;
 
                             if (deltaT > 0)
                             {
-                                totalVelocity = deltaV / deltaT;
+                                double rawTotalVelocity = deltaV / deltaT;
+                                double rawTotalAcceleration = 0;
 
-                                if (previousTotalVelocityTimestamp > 0 && lastUpdateTimestamp > previousTotalVelocityTimestamp)
+                                if (lastUpdateTimestamp > previousTotalVelocityTimestamp)
                                 {
-                                    double deltaVelocity = totalVelocity - previousTotalVelocity;
+                                    double deltaVelocity = rawTotalVelocity - previousTotalVelocity;
                                     double deltaTVelocity = lastUpdateTimestamp - previousTotalVelocityTimestamp;
 
                                     if (deltaTVelocity > 0)
                                     {
-                                        totalAcceleration = deltaVelocity / deltaTVelocity;
+                                        rawTotalAcceleration = deltaVelocity / deltaTVelocity;
                                     }
                                 }
 
+                                // Apply EMA to totalVelocity
+                                if (isTotalVelocityInitialized)
+                                {
+                                    emaTotalVelocity = (rawTotalVelocity * smoothingFactor) + (emaTotalVelocity * (1 - smoothingFactor));
+                                }
+                                else
+                                {
+                                    emaTotalVelocity = rawTotalVelocity;
+                                    isTotalVelocityInitialized = true;
+                                }
+                                totalVelocity = emaTotalVelocity;
+
+                                // Apply EMA to totalAcceleration
+                                if (isTotalAccelerationInitialized)
+                                {
+                                    emaTotalAcceleration = (rawTotalAcceleration * smoothingFactor) + (emaTotalAcceleration * (1 - smoothingFactor));
+                                }
+                                else
+                                {
+                                    emaTotalAcceleration = rawTotalAcceleration;
+                                    isTotalAccelerationInitialized = true;
+                                }
+                                totalAcceleration = emaTotalAcceleration;
+
                                 // Update previous total velocity and timestamp
-                                previousTotalVelocity = totalVelocity;
+                                previousTotalVelocity = rawTotalVelocity;
                                 previousTotalVelocityTimestamp = lastUpdateTimestamp;
                             }
+
+                            // Update previous total ask volume and timestamp
+                            previousTotalAskVolume = totalAskVolume;
+                            previousTotalAskVolumeTimestamp = lastUpdateTimestamp;
+                        }
+                        else
+                        {
+                            // Timestamp has not advanced; do nothing
                         }
 
                         // Print updated total velocity and acceleration
-                        Print("Total | Timestamp: " + lastUpdateTimestamp + 
-                              " | Total Velocity: " + totalVelocity + 
-                              " | Total Acceleration: " + totalAcceleration);
-
-                        // Update previous total ask volume and timestamp
-                        previousTotalAskVolume = totalAskVolume;
-                        previousTotalAskVolumeTimestamp = lastUpdateTimestamp;
+                        Print("Total | Timestamp: " + lastUpdateTimestamp +
+                              " | Smoothed Total Velocity: " + totalVelocity +
+                              " | Smoothed Total Acceleration: " + totalAcceleration);
                     }
+                    // --- End of Adjusted Code ---
+
                     if (options.ContainsKey("Total_GEX_Volume"))
                     {
                         totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
@@ -696,18 +786,18 @@ namespace NinjaTrader.NinjaScript.Indicators
                     float strikeTextWidth = strikeTextLayout.Metrics.Width;
                     float strikeTextHeight = strikeTextLayout.Metrics.Height;
                     float volumeTextHeight = volumeTextLayout.Metrics.Height;
-					float volumeTextWidth = volumeTextLayout.Metrics.Width;
+                    float volumeTextWidth = volumeTextLayout.Metrics.Width;
                     float velocityTextHeight = velocityTextLayout.Metrics.Height;
                     float accelerationTextHeight = accelerationTextLayout.Metrics.Height;
 
                     float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, volumeTextWidth) - 5;
                     // Position "Strike" and "Net Ask Vol" above the strike line
-		            float yVolumeText = y - 15; // Slightly above the strike line
-		            float yStrikeText = yVolumeText - volumeTextHeight;
+                    float yVolumeText = y - 15; // Slightly above the strike line
+                    float yStrikeText = yVolumeText - volumeTextHeight;
 
-		            // Position "Velocity" and "Acceleration" below the strike line
-		            float yVelocityText = y +2; // Slightly below the strike line
-		            float yAccelerationText = yVelocityText + velocityTextHeight;
+                    // Position "Velocity" and "Acceleration" below the strike line
+                    float yVelocityText = y + 2; // Slightly below the strike line
+                    float yAccelerationText = yVelocityText + velocityTextHeight;
 
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yVolumeText), volumeTextLayout, textBrush);
@@ -1081,5 +1171,3 @@ namespace NinjaTrader.NinjaScript.Strategies
 }
 
 #endregion
-
-
