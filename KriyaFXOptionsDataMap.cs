@@ -305,9 +305,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 Print("Processing options data...");
                 var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
-                velocitiesList.Clear();
-                accelerationsList.Clear();
-
+                
                 if (!data.ContainsKey("Options"))
                 {
                     Print("Options data not found in the response.");
@@ -323,225 +321,219 @@ namespace NinjaTrader.NinjaScript.Indicators
                     return;
                 }
 
+                long currentUpdateTimestamp = 0;
                 if (options.ContainsKey("Updated"))
                 {
-                    lastUpdateTimestamp = Convert.ToInt64(options["Updated"]);
+                    currentUpdateTimestamp = Convert.ToInt64(options["Updated"]);
                 }
 
-                if (options.ContainsKey("Symbol"))
+                // Only process the data if the timestamp has changed
+                if (currentUpdateTimestamp != lastUpdateTimestamp)
                 {
-                    underlyingSymbol = options["Symbol"].ToString();
-                }
+                    lastUpdateTimestamp = currentUpdateTimestamp;
+                    Print("New update timestamp: " + lastUpdateTimestamp);
 
-                // Calculate future price and ratio only if not already calculated
-                if (!isRatioCalculated)
-                {
-                    futurePrice = GetFuturePriceAtTimestamp(lastUpdateTimestamp);
-                    var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
-
-                    indexPrice = Convert.ToDouble(data["Price"]);
-                    fixedRatio = futurePrice / indexPrice;
-                    isRatioCalculated = true;
-
-                    Print("Initial Future Price (at timestamp): " + futurePrice);
-                    Print("Initial Index Price: " + indexPrice);
-                    Print("Fixed Index to Futures Ratio: " + fixedRatio);
-                }
-                else
-                {
-                    // Use the fixed ratio for calculations, but update the index price
-                    indexPrice = Convert.ToDouble(data["Price"]);
-                    futurePrice = indexPrice * fixedRatio;
-                }
-
-                double roundedIndexStrike = Math.Floor(indexPrice);
-
-                if (data.ContainsKey("ExpectedMove"))
-                {
-                    expectedMove = Convert.ToDouble(data["ExpectedMove"]);
-
-                    indexPrice = Convert.ToDouble(data["Price"]);
-
-                    if (!isExpectedMoveLevelsCalculated)
+                    if (options.ContainsKey("Symbol"))
                     {
-                        fixedExpectedMaxPrice = (indexPrice + expectedMove) * fixedRatio;
-                        fixedExpectedMinPrice = (indexPrice - expectedMove) * fixedRatio;
-
-                        isExpectedMoveLevelsCalculated = true;
-
+                        underlyingSymbol = options["Symbol"].ToString();
                     }
-                }
 
-                var dataJson = jsonSerializer.Serialize(options["Data"]);
-                var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
-
-                strikeLevels.Clear();
-                indexStrikes.Clear();
-                netAskVolumes.Clear();
-                callAskVolumes.Clear();
-                putAskVolumes.Clear();
-
-                foreach (var item in optionsData)
-                {
-                    if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume") &&
-                        item.ContainsKey("call") && item.ContainsKey("put"))
+                    // Calculate future price and ratio only if not already calculated
+                    if (!isRatioCalculated)
                     {
-                        double indexStrike = Convert.ToDouble(item["strike"]);
-                        double futureStrike = indexStrike * fixedRatio;
-                        double netAskVolume = Convert.ToDouble(item["Net_ASK_Volume"]);
-                        var call = item["call"] as Dictionary<string, object>;
-                        var put = item["put"] as Dictionary<string, object>;
+                        futurePrice = GetFuturePriceAtTimestamp(lastUpdateTimestamp);
+                        var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
 
-                        double callAskVolume = 0;
-                        double putAskVolume = 0;
+                        indexPrice = Convert.ToDouble(data["Price"]);
+                        fixedRatio = futurePrice / indexPrice;
+                        isRatioCalculated = true;
 
-                        if (call.ContainsKey("askvolume"))
-                        {
-                            callAskVolume = Convert.ToDouble(call["askvolume"]);
-                        }
-                        if (put.ContainsKey("askvolume"))
-                        {
-                            putAskVolume = Convert.ToDouble(put["askvolume"]);
-                        }
-
-                        // **Compute Velocity and Acceleration**
-                        double velocity = 0;
-                        double acceleration = 0;
-
-                        if (previousNetAskVolumeData.ContainsKey(futureStrike))
-                        {
-                            NetAskVolumeData previousData = previousNetAskVolumeData[futureStrike];
-                            double previousNetAskVolume = previousData.NetAskVolume;
-                            long previousNetAskVolumeTimestamp = previousData.NetAskVolumeTimestamp;
-
-                            double deltaV = netAskVolume - previousNetAskVolume;
-                            double deltaT = lastUpdateTimestamp - previousNetAskVolumeTimestamp; // Time difference in seconds
-
-                            if (deltaT > 0)
-                            {
-                                velocity = deltaV / deltaT; // $$ per second
-
-                                double previousVelocity = previousData.Velocity;
-                                long previousVelocityTimestamp = previousData.VelocityTimestamp;
-                                double deltaVelocityTime = lastUpdateTimestamp - previousVelocityTimestamp;
-
-                                if (deltaVelocityTime > 0)
-                                {
-                                    acceleration = (velocity - previousVelocity) / deltaVelocityTime; // $$ per second squared
-                                }
-                                else
-                                {
-                                    acceleration = 0;
-                                }
-                            }
-                            else
-                            {
-                                velocity = 0;
-                                acceleration = 0;
-                            }
-                        }
-                        else
-                        {
-                            velocity = 0;
-                            acceleration = 0;
-                        }
-
-                        // **Update the dictionaries with current values**
-                        previousNetAskVolumeData[futureStrike] = new NetAskVolumeData
-                        {
-                            NetAskVolume = netAskVolume,
-                            NetAskVolumeTimestamp = lastUpdateTimestamp,
-                            Velocity = velocity,
-                            VelocityTimestamp = lastUpdateTimestamp
-                        };
-
-                        // **Store the computed values in lists**
-                        velocitiesList.Add(velocity);
-                        accelerationsList.Add(acceleration);
-
-                        // Existing code to populate lists
-                        indexStrikes.Add(indexStrike);
-                        strikeLevels.Add(futureStrike);
-                        netAskVolumes.Add(netAskVolume);
-                        callAskVolumes.Add(callAskVolume);
-                        putAskVolumes.Add(putAskVolume);
-                    }
-                }
-
-                if (options.ContainsKey("Total_ASK_Volume"))
-                {
-                    totalAskVolume = Convert.ToDouble(options["Total_ASK_Volume"]);
-
-                    // **Compute Total Velocity and Total Acceleration**
-                    if (previousTotalAskVolumeTimestamp > 0)
-                    {
-                        double deltaV = totalAskVolume - previousTotalAskVolume;
-                        double deltaT = lastUpdateTimestamp - previousTotalAskVolumeTimestamp;
-
-                        if (deltaT > 0)
-                        {
-                            totalVelocity = deltaV / deltaT;
-
-                            if (previousTotalVelocityTimestamp > 0)
-                            {
-                                double deltaVelocity = totalVelocity - previousTotalVelocity;
-                                double deltaTVelocity = lastUpdateTimestamp - previousTotalVelocityTimestamp;
-
-                                if (deltaTVelocity > 0)
-                                {
-                                    totalAcceleration = deltaVelocity / deltaTVelocity;
-                                }
-                                else
-                                {
-                                    totalAcceleration = 0;
-                                }
-                            }
-                            else
-                            {
-                                totalAcceleration = 0;
-                            }
-
-                            // Update previous total velocity and timestamp
-                            previousTotalVelocity = totalVelocity;
-                            previousTotalVelocityTimestamp = lastUpdateTimestamp;
-                        }
-                        else
-                        {
-                            totalVelocity = 0;
-                            totalAcceleration = 0;
-                        }
+                        Print("Initial Future Price (at timestamp): " + futurePrice);
+                        Print("Initial Index Price: " + indexPrice);
+                        Print("Fixed Index to Futures Ratio: " + fixedRatio);
                     }
                     else
                     {
-                        totalVelocity = 0;
-                        totalAcceleration = 0;
-                        previousTotalVelocity = 0;
-                        previousTotalVelocityTimestamp = lastUpdateTimestamp;
+                        // Use the fixed ratio for calculations, but update the index price
+                        indexPrice = Convert.ToDouble(data["Price"]);
+                        futurePrice = indexPrice * fixedRatio;
                     }
 
-                    // Update previous total ask volume and timestamp
-                    previousTotalAskVolume = totalAskVolume;
-                    previousTotalAskVolumeTimestamp = lastUpdateTimestamp;
-                }
-                if (options.ContainsKey("Total_GEX_Volume"))
-                {
-                    totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
-                }
+                    double roundedIndexStrike = Math.Floor(indexPrice);
 
-                isDataFetched = true;
-
-                // Invalidate the chart to trigger a redraw
-                if (ChartControl != null)
-                {
-                    ChartControl.Dispatcher.InvokeAsync(() =>
+                    if (data.ContainsKey("ExpectedMove"))
                     {
-                        ChartControl.InvalidateVisual();
-                        Print("[" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff") + "] Chart invalidated for redraw");
-                    });
+                        expectedMove = Convert.ToDouble(data["ExpectedMove"]);
+
+                        indexPrice = Convert.ToDouble(data["Price"]);
+
+                        if (!isExpectedMoveLevelsCalculated)
+                        {
+                            fixedExpectedMaxPrice = (indexPrice + expectedMove) * fixedRatio;
+                            fixedExpectedMinPrice = (indexPrice - expectedMove) * fixedRatio;
+
+                            isExpectedMoveLevelsCalculated = true;
+
+                        }
+                    }
+
+                    velocitiesList.Clear();
+                    accelerationsList.Clear();
+
+                    var dataJson = jsonSerializer.Serialize(options["Data"]);
+                    var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
+
+                    strikeLevels.Clear();
+                    indexStrikes.Clear();
+                    netAskVolumes.Clear();
+                    callAskVolumes.Clear();
+                    putAskVolumes.Clear();
+
+                    foreach (var item in optionsData)
+                    {
+                        if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume") &&
+                            item.ContainsKey("call") && item.ContainsKey("put"))
+                        {
+                            double indexStrike = Convert.ToDouble(item["strike"]);
+                            double futureStrike = indexStrike * fixedRatio;
+                            double netAskVolume = Convert.ToDouble(item["Net_ASK_Volume"]);
+                            var call = item["call"] as Dictionary<string, object>;
+                            var put = item["put"] as Dictionary<string, object>;
+
+                            double callAskVolume = 0;
+                            double putAskVolume = 0;
+
+                            if (call.ContainsKey("askvolume"))
+                            {
+                                callAskVolume = Convert.ToDouble(call["askvolume"]);
+                            }
+                            if (put.ContainsKey("askvolume"))
+                            {
+                                putAskVolume = Convert.ToDouble(put["askvolume"]);
+                            }
+
+                            // Compute Velocity and Acceleration only if the timestamp has changed
+                            double velocity = 0;
+                            double acceleration = 0;
+
+                            if (previousNetAskVolumeData.ContainsKey(futureStrike))
+                            {
+                                NetAskVolumeData previousData = previousNetAskVolumeData[futureStrike];
+                                double previousNetAskVolume = previousData.NetAskVolume;
+                                long previousNetAskVolumeTimestamp = previousData.NetAskVolumeTimestamp;
+
+                                if (lastUpdateTimestamp > previousNetAskVolumeTimestamp)
+                                {
+                                    double deltaV = netAskVolume - previousNetAskVolume;
+                                    double deltaT = lastUpdateTimestamp - previousNetAskVolumeTimestamp;
+
+                                    if (deltaT > 0)
+                                    {
+                                        velocity = deltaV / deltaT;
+
+                                        double previousVelocity = previousData.Velocity;
+                                        long previousVelocityTimestamp = previousData.VelocityTimestamp;
+                                        double deltaVelocityTime = lastUpdateTimestamp - previousVelocityTimestamp;
+
+                                        if (deltaVelocityTime > 0)
+                                        {
+                                            acceleration = (velocity - previousVelocity) / deltaVelocityTime;
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Print updated velocity and acceleration
+                            Print("Strike: " + futureStrike + 
+                                  " | Timestamp: " + lastUpdateTimestamp + 
+                                  " | Velocity: " + velocity + 
+                                  " | Acceleration: " + acceleration);
+
+                            // Update the dictionaries with current values
+                            previousNetAskVolumeData[futureStrike] = new NetAskVolumeData
+                            {
+                                NetAskVolume = netAskVolume,
+                                NetAskVolumeTimestamp = lastUpdateTimestamp,
+                                Velocity = velocity,
+                                VelocityTimestamp = lastUpdateTimestamp
+                            };
+
+                            velocitiesList.Add(velocity);
+                            accelerationsList.Add(acceleration);
+
+                            // Existing code to populate lists
+                            indexStrikes.Add(indexStrike);
+                            strikeLevels.Add(futureStrike);
+                            netAskVolumes.Add(netAskVolume);
+                            callAskVolumes.Add(callAskVolume);
+                            putAskVolumes.Add(putAskVolume);
+                        }
+                    }
+
+                    if (options.ContainsKey("Total_ASK_Volume"))
+                    {
+                        totalAskVolume = Convert.ToDouble(options["Total_ASK_Volume"]);
+
+                        // Compute Total Velocity and Total Acceleration only if the timestamp has changed
+                        if (previousTotalAskVolumeTimestamp > 0 && lastUpdateTimestamp > previousTotalAskVolumeTimestamp)
+                        {
+                            double deltaV = totalAskVolume - previousTotalAskVolume;
+                            double deltaT = lastUpdateTimestamp - previousTotalAskVolumeTimestamp;
+
+                            if (deltaT > 0)
+                            {
+                                totalVelocity = deltaV / deltaT;
+
+                                if (previousTotalVelocityTimestamp > 0 && lastUpdateTimestamp > previousTotalVelocityTimestamp)
+                                {
+                                    double deltaVelocity = totalVelocity - previousTotalVelocity;
+                                    double deltaTVelocity = lastUpdateTimestamp - previousTotalVelocityTimestamp;
+
+                                    if (deltaTVelocity > 0)
+                                    {
+                                        totalAcceleration = deltaVelocity / deltaTVelocity;
+                                    }
+                                }
+
+                                // Update previous total velocity and timestamp
+                                previousTotalVelocity = totalVelocity;
+                                previousTotalVelocityTimestamp = lastUpdateTimestamp;
+                            }
+                        }
+
+                        // Print updated total velocity and acceleration
+                        Print("Total | Timestamp: " + lastUpdateTimestamp + 
+                              " | Total Velocity: " + totalVelocity + 
+                              " | Total Acceleration: " + totalAcceleration);
+
+                        // Update previous total ask volume and timestamp
+                        previousTotalAskVolume = totalAskVolume;
+                        previousTotalAskVolumeTimestamp = lastUpdateTimestamp;
+                    }
+                    if (options.ContainsKey("Total_GEX_Volume"))
+                    {
+                        totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
+                    }
+
+                    isDataFetched = true;
+
+                    // Invalidate the chart to trigger a redraw
+                    if (ChartControl != null)
+                    {
+                        ChartControl.Dispatcher.InvokeAsync(() =>
+                        {
+                            ChartControl.InvalidateVisual();
+                            Print("Chart invalidated for redraw at " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+                        });
+                    }
+                    else
+                    {
+                        Print("ChartControl is null, cannot invalidate");
+                    }
                 }
                 else
                 {
-                    Print("ChartControl is null, cannot invalidate");
+                    Print("Timestamp unchanged: " + currentUpdateTimestamp + ", skipping data processing");
                 }
             }
             catch (Exception ex)
@@ -1089,3 +1081,5 @@ namespace NinjaTrader.NinjaScript.Strategies
 }
 
 #endregion
+
+
