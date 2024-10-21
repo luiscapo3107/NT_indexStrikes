@@ -145,6 +145,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     Username = string.Empty;
                     Password = string.Empty;
                     WebSocketUrl = "ws://localhost:3000";
+                    SmoothingFactor = 0.5; // Default value
                     Print("KriyaFXOptionsMap: SetDefaults completed");
                 }
                 else if (State == State.Configure)
@@ -1098,18 +1099,21 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         #region Properties
         [NinjaScriptProperty]
-        [Display(Name = "Username", Description = "User Name for KriyaFX service", Order = 1, GroupName = "Parameters")]
-        public string Username
-        { get; set; }
+        [Display(Name = "Username", Order = 1, GroupName = "Parameters")]
+        public string Username { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "Password", Description = "Password for KriyaFX Service", Order = 2, GroupName = "Parameters")]
-        public string Password
-        { get; set; }
+        [Display(Name = "Password", Order = 2, GroupName = "Parameters")]
+        public string Password { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "WebSocket URL", Description = "URL for the WebSocket server", Order = 3, GroupName = "Parameters")]
+        [Display(Name = "WebSocket URL", Order = 3, GroupName = "Parameters")]
         public string WebSocketUrl { get; set; }
+
+        [NinjaScriptProperty]
+        [Range(0, 1)]
+        [Display(Name = "Smoothing Factor", Description = "EMA smoothing factor (0-1)", Order = 4, GroupName = "Parameters")]
+        public double SmoothingFactor { get; set; }
         #endregion
 
     }
@@ -1171,3 +1175,4 @@ namespace NinjaTrader.NinjaScript.Strategies
 }
 
 #endregion
+
