@@ -417,13 +417,13 @@ namespace NinjaTrader.NinjaScript.Indicators
                             double callAskVolume = 0;
                             double putAskVolume = 0;
 
-                            if (call.ContainsKey("askvolume"))
+                            if (call.ContainsKey("ASK_Volume"))
                             {
-                                callAskVolume = Convert.ToDouble(call["askvolume"]);
+                                callAskVolume = Convert.ToDouble(call["ASK_Volume"]);
                             }
-                            if (put.ContainsKey("askvolume"))
+                            if (put.ContainsKey("ASK_Volume"))
                             {
-                                putAskVolume = Convert.ToDouble(put["askvolume"]);
+                                putAskVolume = Convert.ToDouble(put["ASK_Volume"]);
                             }
 
                             // Compute Velocity and Acceleration only if the timestamp has changed
@@ -774,34 +774,50 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 // Prepare text for display
                 string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
-                string volumeText = "Net Ask Vol: " + FormatVolume(netAskVolume);
+                string netAskVolumeText = "Net $$ Vol: " + FormatVolume(netAskVolume);
+
+                // Compare call and put ask volumes
+                double callAskVolume = callAskVolumes[i];
+                double putAskVolume = putAskVolumes[i];
+                string dominantAskVolumeText;
+                if (callAskVolume >= putAskVolume)
+                {
+                    dominantAskVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume);
+                }
+                else
+                {
+                    dominantAskVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume);
+                }
+
                 string velocityText = "Velocity: " + FormatRate(velocity);
                 string accelerationText = "Acceleration: " + FormatAcceleration(acceleration);
 
                 using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
                 using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
-                using (var volumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, volumeText, textFormat, float.MaxValue, float.MaxValue))
+                using (var netAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
+                using (var dominantAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, dominantAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
                 using (var velocityTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, velocityText, textFormat, float.MaxValue, float.MaxValue))
                 using (var accelerationTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, accelerationText, textFormat, float.MaxValue, float.MaxValue))
                 {
                     float strikeTextWidth = strikeTextLayout.Metrics.Width;
                     float strikeTextHeight = strikeTextLayout.Metrics.Height;
-                    float volumeTextHeight = volumeTextLayout.Metrics.Height;
-                    float volumeTextWidth = volumeTextLayout.Metrics.Width;
+                    float netAskVolumeTextHeight = netAskVolumeTextLayout.Metrics.Height;
+                    float dominantAskVolumeTextHeight = dominantAskVolumeTextLayout.Metrics.Height;
                     float velocityTextHeight = velocityTextLayout.Metrics.Height;
                     float accelerationTextHeight = accelerationTextLayout.Metrics.Height;
 
-                    float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, volumeTextWidth) - 5;
-                    // Position "Strike" and "Net Ask Vol" above the strike line
-                    float yVolumeText = y - 15; // Slightly above the strike line
-                    float yStrikeText = yVolumeText - volumeTextHeight;
-
-                    // Position "Velocity" and "Acceleration" below the strike line
-                    float yVelocityText = y + 2; // Slightly below the strike line
+                    float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, Math.Max(netAskVolumeTextLayout.Metrics.Width, dominantAskVolumeTextLayout.Metrics.Width)) - 5;
+                    
+                    // Position text elements
+                    float yStrikeText = y - 15 - strikeTextHeight - dominantAskVolumeTextHeight;
+                    float yDominantAskVolumeText = yStrikeText + strikeTextHeight;
+                    float yNetAskVolumeText = yDominantAskVolumeText + netAskVolumeTextHeight;
+                    float yVelocityText = y; // Slightly below the strike line
                     float yAccelerationText = yVelocityText + velocityTextHeight;
 
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yVolumeText), volumeTextLayout, textBrush);
+                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yDominantAskVolumeText), dominantAskVolumeTextLayout, textBrush);
+                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetAskVolumeText), netAskVolumeTextLayout, textBrush);
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yVelocityText), velocityTextLayout, textBrush);
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yAccelerationText), accelerationTextLayout, textBrush);
                 }
@@ -920,7 +936,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 RenderTarget.DrawText(FormatTimestamp(lastUpdateTimestamp), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 1 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
 
                 // Total Ask Volume
-                RenderTarget.DrawText("Total Ask Volume:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText("Total Net $$ Vol:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
                 RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 2 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
 
                 // Total Velocity
