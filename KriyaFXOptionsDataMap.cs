@@ -751,88 +751,87 @@ namespace NinjaTrader.NinjaScript.Indicators
 
             for (int i = 0; i < minCount; i++)
             {
-                double strikeLevel = strikeLevels[i];
-                double indexStrike = indexStrikes[i];
-                double netAskVolume = netAskVolumes[i];
-                float y = chartScale.GetYByValue(strikeLevel);
-                double velocity = velocitiesList[i];
-                double acceleration = accelerationsList[i];
-                double netLiquidity = netLiquidityList[i];
-
-                SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume);
-
-                // Draw the line
-                using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)65, (byte)105, (byte)225, (byte)64))) // Royal Blue with 50% opacity
+                try
                 {
-                    RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 2);
+                    double strikeLevel = strikeLevels[i];
+                    double indexStrike = indexStrikes[i];
+                    double netAskVolume = netAskVolumes[i];
+                    float y = chartScale.GetYByValue(strikeLevel);
+                    // double velocity = velocitiesList[i];  // Commented out
+                    // double acceleration = accelerationsList[i];  // Commented out
+                    double netLiquidity = netLiquidityList[i];
+                    double callAskVolume = callAskVolumes[i];
+                    double putAskVolume = putAskVolumes[i];
+
+                    SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume);
+
+                    // Draw the line
+                    using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)65, (byte)105, (byte)225, (byte)64))) // Royal Blue with 50% opacity
+                    {
+                        RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 2);
+                    }
+
+                    // Calculate rectangle coordinates
+                    float yTop = chartScale.GetYByValue(strikeLevel + 1);
+                    float yBottom = chartScale.GetYByValue(strikeLevel - 1);
+
+                    // Draw the rectangle
+                    using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, rectangleColor))
+                    {
+                        RenderTarget.FillRectangle(
+                            new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop),
+                            rectangleBrush
+                        );
+                    }
+
+                    // Prepare text for display
+                    string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
+                    string callVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume);
+                    string putVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume);
+                    string netAskVolumeText = "Net $$ Vol: " + FormatVolume(netAskVolume);
+                    string netLiquidityText = "Net Liquidity: " + FormatLiquidity(netLiquidity);
+
+                    // Comment out velocity and acceleration
+                    // string velocityText = "Velocity: " + FormatRate(velocity);
+                    // string accelerationText = "Acceleration: " + FormatAcceleration(acceleration);
+
+                    using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
+                    using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
+                    using (var callVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, callVolumeText, textFormat, float.MaxValue, float.MaxValue))
+                    using (var putVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, putVolumeText, textFormat, float.MaxValue, float.MaxValue))
+                    using (var netAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
+                    using (var netLiquidityTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netLiquidityText, textFormat, float.MaxValue, float.MaxValue))
+                    {
+                        float strikeTextWidth = strikeTextLayout.Metrics.Width;
+                        float strikeTextHeight = strikeTextLayout.Metrics.Height;
+                        float callVolumeTextHeight = callVolumeTextLayout.Metrics.Height;
+                        float putVolumeTextHeight = putVolumeTextLayout.Metrics.Height;
+                        float netAskVolumeTextHeight = netAskVolumeTextLayout.Metrics.Height;
+                        float netLiquidityTextHeight = netLiquidityTextLayout.Metrics.Height;
+
+                        float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, 
+                            Math.Max(callVolumeTextLayout.Metrics.Width, 
+                            Math.Max(putVolumeTextLayout.Metrics.Width, 
+                            Math.Max(netAskVolumeTextLayout.Metrics.Width, 
+                            netLiquidityTextLayout.Metrics.Width)))) - 5;
+                        
+                        // Position text elements
+                        float yStrikeText = y - 30 ;
+                        float yCallVolumeText = yStrikeText + strikeTextHeight;
+                        float yPutVolumeText = yCallVolumeText + callVolumeTextHeight;
+                        float yNetAskVolumeText = yPutVolumeText + putVolumeTextHeight;
+                        float yNetLiquidityText = yNetAskVolumeText + netAskVolumeTextHeight;
+
+                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
+                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yCallVolumeText), callVolumeTextLayout, textBrush);
+                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yPutVolumeText), putVolumeTextLayout, textBrush);
+                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetAskVolumeText), netAskVolumeTextLayout, textBrush);
+                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetLiquidityText), netLiquidityTextLayout, textBrush);
+                    }
                 }
-
-                // Calculate rectangle coordinates
-                float yTop = chartScale.GetYByValue(strikeLevel + 1);
-                float yBottom = chartScale.GetYByValue(strikeLevel - 1);
-
-                // Draw the rectangle
-                using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, rectangleColor))
+                catch (Exception ex)
                 {
-                    RenderTarget.FillRectangle(
-                        new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop),
-                        rectangleBrush
-                    );
-                }
-
-                // Prepare text for display
-                string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
-                string netAskVolumeText = "Net $$ Vol: " + FormatVolume(netAskVolume);
-
-                // Compare call and put ask volumes
-                double callAskVolume = callAskVolumes[i];
-                double putAskVolume = putAskVolumes[i];
-                string dominantAskVolumeText;
-                if (Math.Abs(callAskVolume) >= Math.Abs(putAskVolume))
-                {
-                    dominantAskVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume);
-                }
-                else
-                {
-                    dominantAskVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume);
-                }
-
-                string velocityText = "Velocity: " + FormatRate(velocity);
-                string accelerationText = "Acceleration: " + FormatAcceleration(acceleration);
-                string netLiquidityText = "Net Liquidity: " + FormatLiquidity(netLiquidity);
-
-                using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
-                using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
-                using (var netAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
-                using (var dominantAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, dominantAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
-                using (var velocityTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, velocityText, textFormat, float.MaxValue, float.MaxValue))
-                using (var accelerationTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, accelerationText, textFormat, float.MaxValue, float.MaxValue))
-                using (var netLiquidityTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netLiquidityText, textFormat, float.MaxValue, float.MaxValue))
-                {
-                    float strikeTextWidth = strikeTextLayout.Metrics.Width;
-                    float strikeTextHeight = strikeTextLayout.Metrics.Height;
-                    float netAskVolumeTextHeight = netAskVolumeTextLayout.Metrics.Height;
-                    float dominantAskVolumeTextHeight = dominantAskVolumeTextLayout.Metrics.Height;
-                    float velocityTextHeight = velocityTextLayout.Metrics.Height;
-                    float accelerationTextHeight = accelerationTextLayout.Metrics.Height;
-                    float netLiquidityTextHeight = netLiquidityTextLayout.Metrics.Height;
-
-                    float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, Math.Max(netAskVolumeTextLayout.Metrics.Width, dominantAskVolumeTextLayout.Metrics.Width)) - 5;
-                    
-                    // Position text elements
-                    float yStrikeText = y - 15 - strikeTextHeight - dominantAskVolumeTextHeight;
-                    float yDominantAskVolumeText = yStrikeText + strikeTextHeight;
-                    float yNetAskVolumeText = yDominantAskVolumeText + netAskVolumeTextHeight;
-                    float yVelocityText = y; // Slightly below the strike line
-                    float yAccelerationText = yVelocityText + velocityTextHeight;
-                    float yNetLiquidityText = yAccelerationText + accelerationTextHeight;
-
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yDominantAskVolumeText), dominantAskVolumeTextLayout, textBrush);
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetAskVolumeText), netAskVolumeTextLayout, textBrush);
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yVelocityText), velocityTextLayout, textBrush);
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yAccelerationText), accelerationTextLayout, textBrush);
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetLiquidityText), netLiquidityTextLayout, textBrush);
+                    Print("Error plotting strike level " + i + ": " + ex.Message);
                 }
             }
 
@@ -1165,18 +1164,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private KriyaFXOptionsMap[] cacheKriyaFXOptionsMap;
-		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl)
+		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double smoothingFactor)
 		{
-			return KriyaFXOptionsMap(Input, username, password, webSocketUrl);
+			return KriyaFXOptionsMap(Input, username, password, webSocketUrl, smoothingFactor);
 		}
 
-		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password, string webSocketUrl)
+		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password, string webSocketUrl, double smoothingFactor)
 		{
 			if (cacheKriyaFXOptionsMap != null)
 				for (int idx = 0; idx < cacheKriyaFXOptionsMap.Length; idx++)
-					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
+					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXOptionsMap[idx].SmoothingFactor == smoothingFactor && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
 						return cacheKriyaFXOptionsMap[idx];
-			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password, WebSocketUrl = webSocketUrl }, input, ref cacheKriyaFXOptionsMap);
+			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password, WebSocketUrl = webSocketUrl, SmoothingFactor = smoothingFactor }, input, ref cacheKriyaFXOptionsMap);
 		}
 	}
 }
@@ -1185,14 +1184,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double smoothingFactor)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl);
+			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, smoothingFactor);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double smoothingFactor)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl);
+			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, smoothingFactor);
 		}
 	}
 }
@@ -1201,17 +1200,16 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double smoothingFactor)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl);
+			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, smoothingFactor);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double smoothingFactor)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl);
+			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, smoothingFactor);
 		}
 	}
 }
 
 #endregion
-
