@@ -788,7 +788,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 double callAskVolume = callAskVolumes[i];
                 double putAskVolume = putAskVolumes[i];
                 string dominantAskVolumeText;
-                if (callAskVolume >= putAskVolume)
+                if (Math.Abs(callAskVolume) >= Math.Abs(putAskVolume))
                 {
                     dominantAskVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume);
                 }
@@ -971,7 +971,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         // Add this method to format the liquidity value
         private string FormatLiquidity(double liquidity)
         {
-            return liquidity.ToString("F2");
+            return "$"+ liquidity.ToString("F2");
         }
 
         private string FormatVolumeForDisplay(double volume)
