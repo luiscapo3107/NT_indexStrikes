@@ -126,6 +126,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double smoothingFactor = 0.4; // Adjust between 0 and 1 as needed
 
         private double totalLiquidity;
+        private List<double> netLiquidityList = new List<double>();
 
         protected override void OnStateChange()
         {
@@ -393,12 +394,12 @@ namespace NinjaTrader.NinjaScript.Indicators
                         }
                     }
 
-                    velocitiesList.Clear();
-                    accelerationsList.Clear();
-
                     var dataJson = jsonSerializer.Serialize(options["Data"]);
                     var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
 
+                    velocitiesList.Clear();
+                    accelerationsList.Clear();
+                    netLiquidityList.Clear();
                     strikeLevels.Clear();
                     indexStrikes.Clear();
                     netAskVolumes.Clear();
@@ -416,22 +417,16 @@ namespace NinjaTrader.NinjaScript.Indicators
                             var call = item["call"] as Dictionary<string, object>;
                             var put = item["put"] as Dictionary<string, object>;
 
-                            double callAskVolume = 0;
-                            double putAskVolume = 0;
-
-                            if (call.ContainsKey("ASK_Volume"))
-                            {
-                                callAskVolume = Convert.ToDouble(call["ASK_Volume"]);
-                            }
-                            if (put.ContainsKey("ASK_Volume"))
-                            {
-                                putAskVolume = Convert.ToDouble(put["ASK_Volume"]);
-                            }
-
-                            // Compute Velocity and Acceleration only if the timestamp has changed
-                            double velocity = 0;
-                            double acceleration = 0;
-
+                            double callAskVolume = call.ContainsKey("ASK_Volume") ? Convert.ToDouble(call["ASK_Volume"]) : 0;
+                            double putAskVolume = put.ContainsKey("ASK_Volume") ? Convert.ToDouble(put["ASK_Volume"]) : 0;
+                            
+                            // Default values if not present
+                            double netLiquidity = item.ContainsKey("Net_Liquidity") ? Convert.ToDouble(item["Net_Liquidity"]) : 0;
+                            
+                            // Compute Velocity and Acceleration
+                            double smoothedVelocity = 0;
+                            double smoothedAcceleration = 0;
+                            
                             if (previousNetAskVolumeData.ContainsKey(futureStrike))
                             {
                                 NetAskVolumeData previousData = previousNetAskVolumeData[futureStrike];
@@ -445,7 +440,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                                     if (deltaT > 0)
                                     {
-                                        velocity = deltaV / deltaT;
+                                        double velocity = deltaV / deltaT;
 
                                         double previousVelocity = previousData.Velocity;
                                         long previousVelocityTimestamp = previousData.VelocityTimestamp;
@@ -453,39 +448,37 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                                         if (deltaVelocityTime > 0)
                                         {
-                                            acceleration = (velocity - previousVelocity) / deltaVelocityTime;
+                                            double acceleration = (velocity - previousVelocity) / deltaVelocityTime;
+
+                                            // Apply EMA to Velocity
+                                            if (emaVelocity.ContainsKey(futureStrike))
+                                            {
+                                                double previousEmaVelocity = emaVelocity[futureStrike];
+                                                smoothedVelocity = (velocity * smoothingFactor) + (previousEmaVelocity * (1 - smoothingFactor));
+                                            }
+                                            else
+                                            {
+                                                // First time, initialize EMA with the current velocity
+                                                smoothedVelocity = velocity;
+                                            }
+                                            emaVelocity[futureStrike] = smoothedVelocity;
+
+                                            // Apply EMA to Acceleration
+                                            if (emaAcceleration.ContainsKey(futureStrike))
+                                            {
+                                                double previousEmaAcceleration = emaAcceleration[futureStrike];
+                                                smoothedAcceleration = (acceleration * smoothingFactor) + (previousEmaAcceleration * (1 - smoothingFactor));
+                                            }
+                                            else
+                                            {
+                                                // First time, initialize EMA with the current acceleration
+                                                smoothedAcceleration = acceleration;
+                                            }
+                                            emaAcceleration[futureStrike] = smoothedAcceleration;
                                         }
                                     }
                                 }
                             }
-
-                            // Apply EMA to Velocity
-                            double smoothedVelocity = velocity;
-                            if (emaVelocity.ContainsKey(futureStrike))
-                            {
-                                double previousEmaVelocity = emaVelocity[futureStrike];
-                                smoothedVelocity = (velocity * smoothingFactor) + (previousEmaVelocity * (1 - smoothingFactor));
-                            }
-                            else
-                            {
-                                // First time, initialize EMA with the current velocity
-                                smoothedVelocity = velocity;
-                            }
-                            emaVelocity[futureStrike] = smoothedVelocity;
-
-                            // Apply EMA to Acceleration
-                            double smoothedAcceleration = acceleration;
-                            if (emaAcceleration.ContainsKey(futureStrike))
-                            {
-                                double previousEmaAcceleration = emaAcceleration[futureStrike];
-                                smoothedAcceleration = (acceleration * smoothingFactor) + (previousEmaAcceleration * (1 - smoothingFactor));
-                            }
-                            else
-                            {
-                                // First time, initialize EMA with the current acceleration
-                                smoothedAcceleration = acceleration;
-                            }
-                            emaAcceleration[futureStrike] = smoothedAcceleration;
 
                             // Print updated velocity and acceleration
                             Print("Strike: " + futureStrike +
@@ -498,19 +491,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                             {
                                 NetAskVolume = netAskVolume,
                                 NetAskVolumeTimestamp = lastUpdateTimestamp,
-                                Velocity = velocity,
+                                Velocity = smoothedVelocity,
                                 VelocityTimestamp = lastUpdateTimestamp
                             };
 
-                            velocitiesList.Add(smoothedVelocity);
-                            accelerationsList.Add(smoothedAcceleration);
-
-                            // Existing code to populate lists
+                            // Add all values to lists, using default values if necessary
                             indexStrikes.Add(indexStrike);
                             strikeLevels.Add(futureStrike);
                             netAskVolumes.Add(netAskVolume);
                             callAskVolumes.Add(callAskVolume);
                             putAskVolumes.Add(putAskVolume);
+                            velocitiesList.Add(smoothedVelocity);
+                            accelerationsList.Add(smoothedAcceleration);
+                            netLiquidityList.Add(netLiquidity);
                         }
                     }
 
@@ -740,16 +733,23 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             Print("PlotStrikeLevels started");
 
-            if (strikeLevels.Count == 0 || indexStrikes.Count != strikeLevels.Count || netAskVolumes.Count != strikeLevels.Count)
+            if (strikeLevels.Count == 0)
             {
-                Print("Mismatch in data counts or no strike levels. Returning.");
+                Print("No strike levels available. Returning.");
                 return;
             }
+
+            int minCount = Math.Min(
+                Math.Min(strikeLevels.Count, indexStrikes.Count),
+                Math.Min(netAskVolumes.Count, velocitiesList.Count)
+            );
+            minCount = Math.Min(minCount, Math.Min(accelerationsList.Count, netLiquidityList.Count));
+            minCount = Math.Min(minCount, Math.Min(callAskVolumes.Count, putAskVolumes.Count));
 
             float xStart = ChartPanel.X;
             float xEnd = ChartPanel.X + ChartPanel.W;
 
-            for (int i = 0; i < strikeLevels.Count; i++)
+            for (int i = 0; i < minCount; i++)
             {
                 double strikeLevel = strikeLevels[i];
                 double indexStrike = indexStrikes[i];
@@ -757,6 +757,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 float y = chartScale.GetYByValue(strikeLevel);
                 double velocity = velocitiesList[i];
                 double acceleration = accelerationsList[i];
+                double netLiquidity = netLiquidityList[i];
 
                 SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume);
 
@@ -798,6 +799,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                 string velocityText = "Velocity: " + FormatRate(velocity);
                 string accelerationText = "Acceleration: " + FormatAcceleration(acceleration);
+                string netLiquidityText = "Net Liquidity: " + FormatLiquidity(netLiquidity);
 
                 using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
                 using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
@@ -805,6 +807,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 using (var dominantAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, dominantAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
                 using (var velocityTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, velocityText, textFormat, float.MaxValue, float.MaxValue))
                 using (var accelerationTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, accelerationText, textFormat, float.MaxValue, float.MaxValue))
+                using (var netLiquidityTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netLiquidityText, textFormat, float.MaxValue, float.MaxValue))
                 {
                     float strikeTextWidth = strikeTextLayout.Metrics.Width;
                     float strikeTextHeight = strikeTextLayout.Metrics.Height;
@@ -812,6 +815,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     float dominantAskVolumeTextHeight = dominantAskVolumeTextLayout.Metrics.Height;
                     float velocityTextHeight = velocityTextLayout.Metrics.Height;
                     float accelerationTextHeight = accelerationTextLayout.Metrics.Height;
+                    float netLiquidityTextHeight = netLiquidityTextLayout.Metrics.Height;
 
                     float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, Math.Max(netAskVolumeTextLayout.Metrics.Width, dominantAskVolumeTextLayout.Metrics.Width)) - 5;
                     
@@ -821,12 +825,14 @@ namespace NinjaTrader.NinjaScript.Indicators
                     float yNetAskVolumeText = yDominantAskVolumeText + netAskVolumeTextHeight;
                     float yVelocityText = y; // Slightly below the strike line
                     float yAccelerationText = yVelocityText + velocityTextHeight;
+                    float yNetLiquidityText = yAccelerationText + accelerationTextHeight;
 
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yDominantAskVolumeText), dominantAskVolumeTextLayout, textBrush);
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetAskVolumeText), netAskVolumeTextLayout, textBrush);
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yVelocityText), velocityTextLayout, textBrush);
                     RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yAccelerationText), accelerationTextLayout, textBrush);
+                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetLiquidityText), netLiquidityTextLayout, textBrush);
                 }
             }
 
