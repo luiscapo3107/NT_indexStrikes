@@ -125,6 +125,8 @@ namespace NinjaTrader.NinjaScript.Indicators
         // Smoothing factor for EMA
         private double smoothingFactor = 0.4; // Adjust between 0 and 1 as needed
 
+        private double totalLiquidity;
+
         protected override void OnStateChange()
         {
             try
@@ -606,6 +608,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                         totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
                     }
 
+                    if (options.ContainsKey("Total_Liquidity"))
+                    {
+                        totalLiquidity = Convert.ToDouble(options["Total_Liquidity"]);
+                    }
+
                     isDataFetched = true;
 
                     // Invalidate the chart to trigger a redraw
@@ -877,7 +884,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             Print("DrawVolumeTable started");
 
             float tableWidth = 300;
-            float tableHeight = 150; // Adjusted height to accommodate additional rows
+            float tableHeight = 170; // Increased height to accommodate the new row
             float padding = 10;
             float labelWidth = 120;
             float titleHeight = 30;
@@ -946,9 +953,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // Total Acceleration
                 RenderTarget.DrawText("Total Acceleration:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 4 * rowHeight, labelWidth, rowHeight), textBrush);
                 RenderTarget.DrawText(FormatAcceleration(totalAcceleration), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 4 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+                // Total Liquidity
+                RenderTarget.DrawText("Total Liquidity:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 5 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText(FormatLiquidity(totalLiquidity), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 5 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
             }
 
             Print("DrawVolumeTable completed");
+        }
+
+        // Add this method to format the liquidity value
+        private string FormatLiquidity(double liquidity)
+        {
+            return liquidity.ToString("F2");
         }
 
         private string FormatVolumeForDisplay(double volume)
