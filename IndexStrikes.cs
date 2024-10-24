@@ -20,603 +20,872 @@ using NinjaTrader.NinjaScript;
 using NinjaTrader.Core.FloatingPoint;
 using NinjaTrader.NinjaScript.DrawingTools;
 using System.Net.Http;
-using System.Windows.Threading;
-using System.Web.Script.Serialization; // For JSON Parsing
+using System.Net.Http.Headers;
+using System.Web.Script.Serialization; // For JavaScriptSerializer
 using SharpDX;
 using SharpDX.Direct2D1;
 using SharpDX.DirectWrite;
-using Brushes = System.Windows.Media.Brushes;
-using System.Timers; 
+using System.Net.WebSockets;
+using System.Threading;
+using System.IO;
 #endregion
 
+//This namespace holds Indicators in this folder and is required. Do not change it.
 namespace NinjaTrader.NinjaScript.Indicators
 {
-    public class IndexStrikesv2 : Indicator
+    public class KriyaFXIndexStrikes : Indicator
     {
-        #region Private Variables
-
         private HttpClient httpClient;
+        private string bearerToken;
         private JavaScriptSerializer jsonSerializer;
-        private const int STRIKES_ABOVE = 10;
-        private const int STRIKES_BELOW = 10;
         private List<double> strikeLevels = new List<double>();
         private List<double> indexStrikes = new List<double>();
-        private Timer updateTimer; 
-
-        // Variables for expected move calculation
-        private double expectedMoveValue = 0.0;
-        private double indexPrice = 0.0;
-        private double futurePrice = 0.0;
-		private double ratio = 0.0; 
+        private double currentPrice;
 
         // SharpDX Resources
         private SharpDX.DirectWrite.TextFormat textFormat;
         private SharpDX.Direct2D1.Brush textBrush;
-        private SharpDX.Direct2D1.Brush lineBrush;
         private SharpDX.Direct2D1.Brush strikeLineBrush;
 
         // Mutex for thread safety
         private object renderLock = new object();
 
-        #endregion
+        private double futurePrice;
+        private double indexPrice;
 
-        #region OnStateChange
+        private List<double> netAskVolumes = new List<double>();
+        private List<double> callAskVolumes = new List<double>();
+        private List<double> putAskVolumes = new List<double>();
 
+        private double totalAskVolume;
+        private double totalGexVolume;
+        private SharpDX.DirectWrite.TextFormat tableTitleFormat;
+        private SharpDX.DirectWrite.TextFormat tableContentFormat;
+        private SharpDX.Direct2D1.Brush tableBorderBrush;
+        private SharpDX.Direct2D1.Brush tableBackgroundBrush;
+
+        private double expectedMove;
+        private double expectedMaxPrice;
+        private double expectedMinPrice;
+        private bool isLoggedIn = false;
+        private bool isDataFetched = false;
+        private long lastUpdateTimestamp;
+        private string underlyingSymbol;
+
+        private ClientWebSocket webSocket;
+        private CancellationTokenSource cts;
+        private string authToken;
+
+        private List<string> messageChunks = new List<string>();
+
+        private bool isRatioCalculated = false;
+        private double fixedRatio;
+        private bool isExpectedMoveLevelsCalculated = false;
+        private double fixedExpectedMaxPrice;
+        private double fixedExpectedMinPrice;
+
+        // Class to store net ask volume data per strike
+        private class NetAskVolumeData
+        {
+            public double NetAskVolume { get; set; }
+            public long NetAskVolumeTimestamp { get; set; }
+        }
+
+        // Dictionary to store previous net ask volume data per strike
+        private Dictionary<double, NetAskVolumeData> previousNetAskVolumeData = new Dictionary<double, NetAskVolumeData>();
         protected override void OnStateChange()
-        {
-            if (State == State.SetDefaults)
-            {
-                Description                                 = @"Plots the strike and day range levels of the given index in the chart.";
-                Name                                        = "IndexStrikesv2";
-                Calculate                                   = Calculate.OnBarClose;
-                IsOverlay                                   = true;
-                DisplayInDataBox                            = false;
-                DrawOnPricePanel                            = true;
-                PaintPriceMarkers                           = true;
-                ScaleJustification                          = NinjaTrader.Gui.Chart.ScaleJustification.Right;
-                IsSuspendedWhileInactive                    = true;
-                APIToken                                    = string.Empty;
-                IndexTicker                                 = string.Empty;
-            }
-            else if (State == State.Configure)
-            {
-                // Initialize HTTP client and JSON serializer
-                httpClient = new HttpClient();
-                jsonSerializer = new JavaScriptSerializer();
-
-                //Initialize the timer
-                updateTimer = new Timer(600000); // 600000 milliseconds = 10 minutes
-                updateTimer.Elapsed += OnTimerElapsed; 
-                updateTimer.AutoReset = true; 
-            }
-            else if (State == State.DataLoaded)
-            {
-                // Start the timer
-                updateTimer.Start(); 
-                // Start the async operation without blocking
-                CheckMarketStatusAsync();
-            }
-            else if (State == State.Terminated)
-            {
-                // Stop and dispose of the timer
-                if (updateTimer != null)
-                {
-                    updateTimer.Stop();
-                    updateTimer.Dispose();
-                }
-
-			    // Dispose of HTTP client
-			    if (httpClient != null)
-			        httpClient.Dispose();
-
-			    // Dispose of SharpDX resources
-			    DisposeSharpDXResources();
-            }
-        }
-
-        #endregion
-		private void OnTimerElapsed(object sender, ElapsedEventArgs e)
-        {
-            // This method will be called every x minutes
-            CheckMarketStatusAsync();
-        }
-		public override void OnRenderTargetChanged()
-		{
-		    // Dispose existing resources
-		    DisposeSharpDXResources();
-
-		    if (RenderTarget != null)
-		    {
-		        // Initialize SharpDX resources
-		        textFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12);
-		        textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White);
-		        lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.LightYellow);
-		        strikeLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.DodgerBlue);
-		    }
-		}
-
-		private void DisposeSharpDXResources()
-		{
-		    if (textBrush != null)
-		    {
-		        textBrush.Dispose();
-		        textBrush = null;
-		    }
-		    if (lineBrush != null)
-		    {
-		        lineBrush.Dispose();
-		        lineBrush = null;
-		    }
-		    if (strikeLineBrush != null)
-		    {
-		        strikeLineBrush.Dispose();
-		        strikeLineBrush = null;
-		    }
-		    if (textFormat != null)
-		    {
-		        textFormat.Dispose();
-		        textFormat = null;
-		    }
-		}
-
-
-        #region Async Methods
-
-        private async Task CheckMarketStatusAsync()
         {
             try
             {
-                if (string.IsNullOrEmpty(APIToken))
+                if (State == State.SetDefaults)
                 {
-                    Print("API Token is not set.");
-                    return;
+                    Description = @"Retrieves and plots Options Data from the KriyaFX service";
+                    Name = "KriyaFXIndexStrikes";
+                    Calculate = Calculate.OnBarClose;
+                    IsOverlay = true;
+                    DisplayInDataBox = true;
+                    DrawOnPricePanel = true;
+                    DrawHorizontalGridLines = true;
+                    DrawVerticalGridLines = true;
+                    PaintPriceMarkers = true;
+                    ScaleJustification = NinjaTrader.Gui.Chart.ScaleJustification.Right;
+                    IsSuspendedWhileInactive = true;
+                    Username = string.Empty;
+                    Password = string.Empty;
+                    WebSocketUrl = "ws://localhost:3000";
+                    Print("KriyaFXIndexStrikes: SetDefaults completed");
                 }
+                else if (State == State.Configure)
+                {
+                    httpClient = new HttpClient();
+                    jsonSerializer = new JavaScriptSerializer();
+                    webSocket = new ClientWebSocket();
+                    cts = new CancellationTokenSource();
+                    Print("KriyaFXIndexStrikes: Configure completed");
+                }
+                else if (State == State.DataLoaded)
+                {
+                    Print("KriyaFXIndexStrikes: DataLoaded - Initiating login");
+                    // Only initiate login here, not WebSocket connection
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await Login();
+                        }
+                        catch (Exception ex)
+                        {
+                            Print("Error in Login: " + ex.Message);
+                        }
+                    }).Wait();
+                    Print("KriyaFXIndexStrikes: DataLoaded - Login initiated");
+                }
+                else if (State == State.Historical)
+                {
+                    Print("KriyaFXIndexStrikes: Historical state reached");
+                }
+                else if (State == State.Realtime)
+                {
+                    Print("KriyaFXIndexStrikes: Realtime state reached - Initiating WebSocket connection");
+                    // Initiate WebSocket connection here
+                    Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await ConnectWebSocket();
+                        }
+                        catch (Exception ex)
+                        {
+                            Print("Error in ConnectWebSocket: " + ex.Message);
+                        }
+                    }).Wait();
+                }
+                else if (State == State.Terminated)
+                {
+                    if (httpClient != null)
+                    {
+                        httpClient.Dispose();
+                    }
+                    DisposeSharpDXResources();
+                    DisconnectWebSocket();
+                    Print("KriyaFXIndexStrikes: Terminated - Resources disposed");
+                }
+            }
+            catch (Exception ex)
+            {
+                Print("Error in OnStateChange: " + ex.Message);
+                if (ex.InnerException != null)
+                {
+                    Print("Inner Exception: " + ex.InnerException.Message);
+                }
+            }
+        }
 
-                string marketStatusUrl = "https://api.marketdata.app/v1/markets/status?token=" + APIToken;
-                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, marketStatusUrl);
-                HttpResponseMessage response = await httpClient.SendAsync(request);
+        protected override void OnBarUpdate() { }
 
-                string content = await response.Content.ReadAsStringAsync();
+        private async Task<bool> Login()
+        {
+            try
+            {
+                Print("Attempting login...");
+
+                var loginData = new
+                {
+                    username = Username,
+                    password = Password
+                };
+
+                var content = new StringContent(jsonSerializer.Serialize(loginData), Encoding.UTF8, "application/json");
+                var request = new HttpRequestMessage(HttpMethod.Post, "https://kriyafx.de/api/login")
+                {
+                    Content = content
+                };
+
+                var response = await httpClient.SendAsync(request);
 
                 if (response.IsSuccessStatusCode)
                 {
-                    // Assume market is open for testing
-                    bool isMarketOpen = true;
+                    var responseContent = await response.Content.ReadAsStringAsync();
+                    var tokenObject = jsonSerializer.Deserialize<Dictionary<string, object>>(responseContent);
+                    bearerToken = tokenObject["token"].ToString();
+                    isLoggedIn = true;
+                    Print("Login successful. Bearer token received.");
+                    return true;
+                }
+                else
+                {
+                    isLoggedIn = false;
+                    Print("Login failed. Status code: " + response.StatusCode);
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Print("Error during login: " + ex.Message);
+                isLoggedIn = false;
+                return false;
+            }
+        }
 
-                    if (isMarketOpen)
+        private async Task InitializeConnectionAsync()
+        {
+            try
+            {
+                if (await Login())
+                {
+                    await ConnectWebSocket();
+                }
+                else
+                {
+                    Print("Failed to login. WebSocket connection not established.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Print("Error in InitializeConnectionAsync: " + ex.Message);
+                if (ex.InnerException != null)
+                {
+                    Print("Inner Exception: " + ex.InnerException.Message);
+                }
+            }
+        }
+
+        private double GetFuturePriceAtTimestamp(long timestamp)
+        {
+            // Convert Unix timestamp to DateTime
+            var barTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(timestamp).ToLocalTime();
+
+            // Get the bar index for the specified time
+            int barIndex = BarsArray[0].GetBar(barTime);
+
+            if (barIndex >= 0)
+            {
+                // Return the ask price of the bar
+                return Bars.GetAsk(barIndex);
+            }
+            else
+            {
+                // If no exact match is found, manually search for the closest bar before the specified time
+                for (int i = BarsArray[0].Count - 1; i >= 0; i--)
+                {
+                    if (BarsArray[0].GetTime(i) <= barTime)
                     {
-                        // Start both tasks
-                        var indexPriceTask = GetIndexPriceAsync();
-                        var expectedMoveTask = GetExpectedMoveAsync();
+                        return Bars.GetAsk(i);
+                    }
+                }
 
-                        // Wait for both tasks to complete
-                        await Task.WhenAll(indexPriceTask, expectedMoveTask);
+                // If still no match, return the current ask price as a fallback
+                Print("No historical data found for the specified timestamp. Using current ask price.");
+                return GetCurrentAsk();
+            }
+        }
 
-                        // Once both tasks are done, update the UI
-                        Dispatcher.InvokeAsync(() =>
+        private void ProcessOptionsData(string json)
+        {
+            try
+            {
+                Print("Processing options data...");
+                var data = jsonSerializer.Deserialize<Dictionary<string, object>>(json);
+
+                if (!data.ContainsKey("Options"))
+                {
+                    Print("Options data not found in the response.");
+                    isDataFetched = false;
+                    return;
+                }
+
+                var options = data["Options"] as Dictionary<string, object>;
+                if (options == null || !options.ContainsKey("Data"))
+                {
+                    Print("Options or Data not found in the response.");
+                    isDataFetched = false;
+                    return;
+                }
+
+                long currentUpdateTimestamp = 0;
+                if (options.ContainsKey("Updated"))
+                {
+                    currentUpdateTimestamp = Convert.ToInt64(options["Updated"]);
+                }
+
+                // Only process the data if the timestamp has changed
+                if (currentUpdateTimestamp != lastUpdateTimestamp)
+                {
+                    lastUpdateTimestamp = currentUpdateTimestamp;
+                    Print("New update timestamp: " + lastUpdateTimestamp);
+
+                    if (options.ContainsKey("Symbol"))
+                    {
+                        underlyingSymbol = options["Symbol"].ToString();
+                    }
+
+                    // Calculate future price and ratio only if not already calculated
+                    if (!isRatioCalculated)
+                    {
+                        futurePrice = GetFuturePriceAtTimestamp(lastUpdateTimestamp);
+                        var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
+
+                        indexPrice = Convert.ToDouble(data["Price"]);
+                        fixedRatio = futurePrice / indexPrice;
+                        isRatioCalculated = true;
+
+                        Print("Initial Future Price (at timestamp): " + futurePrice);
+                        Print("Initial Index Price: " + indexPrice);
+                        Print("Fixed Index to Futures Ratio: " + fixedRatio);
+                    }
+                    else
+                    {
+                        // Use the fixed ratio for calculations, but update the index price
+                        indexPrice = Convert.ToDouble(data["Price"]);
+                        futurePrice = indexPrice * fixedRatio;
+                    }
+
+                    double roundedIndexStrike = Math.Floor(indexPrice);
+
+                    if (data.ContainsKey("ExpectedMove"))
+                    {
+                        expectedMove = Convert.ToDouble(data["ExpectedMove"]);
+
+                        indexPrice = Convert.ToDouble(data["Price"]);
+
+                        if (!isExpectedMoveLevelsCalculated)
                         {
-                            PlotAllLines();
+                            fixedExpectedMaxPrice = (indexPrice + expectedMove) * fixedRatio;
+                            fixedExpectedMinPrice = (indexPrice - expectedMove) * fixedRatio;
+
+                            isExpectedMoveLevelsCalculated = true;
+
+                        }
+                    }
+
+                    var dataJson = jsonSerializer.Serialize(options["Data"]);
+                    var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
+
+                    strikeLevels.Clear();
+                    indexStrikes.Clear();
+                    netAskVolumes.Clear();
+                    callAskVolumes.Clear();
+                    putAskVolumes.Clear();
+
+                    foreach (var item in optionsData)
+                    {
+                        if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume") &&
+                            item.ContainsKey("call") && item.ContainsKey("put"))
+                        {
+                            double indexStrike = Convert.ToDouble(item["strike"]);
+                            double futureStrike = indexStrike * fixedRatio;
+                            double netAskVolume = Convert.ToDouble(item["Net_ASK_Volume"]);
+                            var call = item["call"] as Dictionary<string, object>;
+                            var put = item["put"] as Dictionary<string, object>;
+
+                            double callAskVolume = call.ContainsKey("ASK_Volume") ? Convert.ToDouble(call["ASK_Volume"]) : 0;
+                            double putAskVolume = put.ContainsKey("ASK_Volume") ? Convert.ToDouble(call["ASK_Volume"]) : 0;
+
+                            // Update the dictionaries with current values
+                            previousNetAskVolumeData[futureStrike] = new NetAskVolumeData
+                            {
+                                NetAskVolume = netAskVolume,
+                                NetAskVolumeTimestamp = lastUpdateTimestamp
+                            };
+
+                            // Add all values to lists
+                            indexStrikes.Add(indexStrike);
+                            strikeLevels.Add(futureStrike);
+                            netAskVolumes.Add(netAskVolume);
+                            callAskVolumes.Add(callAskVolume);
+                            putAskVolumes.Add(putAskVolume);
+                        }
+                    }
+
+                    if (options.ContainsKey("Total_ASK_Volume"))
+                    {
+                        totalAskVolume = Convert.ToDouble(options["Total_ASK_Volume"]);
+                    }
+
+                    isDataFetched = true;
+
+                    // Invalidate the chart to trigger a redraw
+                    if (ChartControl != null)
+                    {
+                        ChartControl.Dispatcher.InvokeAsync(() =>
+                        {
+                            ChartControl.InvalidateVisual();
+                            Print("Chart invalidated for redraw at " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"));
                         });
                     }
                     else
                     {
-                        UpdateMarketStatusOnUI(false);
+                        Print("ChartControl is null, cannot invalidate");
                     }
                 }
                 else
                 {
-                    Print("Error checking market status: " + response.ReasonPhrase);
+                    Print("Timestamp unchanged: " + currentUpdateTimestamp + ", skipping data processing");
                 }
             }
             catch (Exception ex)
             {
-                Print("Exception in CheckMarketStatusAsync: " + ex.Message);
+                Print("Error processing options data: " + ex.Message);
+                isDataFetched = false;
             }
         }
 
-        private async Task GetIndexPriceAsync()
+        private string FormatTimestamp(long unixTimestamp)
         {
-            try
-            {
-                string indexPriceUrl = "https://api.marketdata.app/v1/stocks/quotes/" + IndexTicker + "?token=" + APIToken;
-                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, indexPriceUrl);
-
-                HttpResponseMessage response = await httpClient.SendAsync(request);
-                string content = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    indexPrice = ParseIndexPrice(content);
-
-                    futurePrice = GetCurrentAsk() - TickSize;
-
-                    Print("IndexPrice: " + indexPrice);
-                    Print("FuturePrice: " + futurePrice);
-					Print("Index to Futures Ratio: " + futurePrice/indexPrice); 
-                }
-                else
-                {
-                    Print("Error retrieving index price: " + response.ReasonPhrase);
-                }
-            }
-            catch (Exception ex)
-            {
-                Print("Exception in GetIndexPriceAsync: " + ex.Message);
-            }
+            DateTimeOffset dateTimeOffset = DateTimeOffset.FromUnixTimeSeconds(unixTimestamp);
+            return dateTimeOffset.LocalDateTime.ToString("dd/MM/yy, HH:mm:ss");
         }
 
-        private async Task GetExpectedMoveAsync()
+        public override void OnRenderTargetChanged()
         {
-            try
+            // Dispose existing resources
+            DisposeSharpDXResources();
+
+            if (RenderTarget != null)
             {
-                string optionsChainUrl = "https://api.marketdata.app/v1/options/chain/" + IndexTicker + "?dte=1&delta=0.5&token=" + APIToken;
-                HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, optionsChainUrl);
+                // Initialize SharpDX resources
+                textFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12);
+                tableTitleFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 14);
+                tableContentFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12);
 
-                HttpResponseMessage response = await httpClient.SendAsync(request);
-                string content = await response.Content.ReadAsStringAsync();
-
-                if (response.IsSuccessStatusCode)
-                {
-                    // Declare variables to hold the last prices
-                    double lastPriceCall;
-                    double lastPricePut;
-
-                    // Parse the response to get last price of the call and the put
-                    ParseOptionsChain(content, out lastPriceCall, out lastPricePut);
-
-                    // Calculate the expected move
-                    expectedMoveValue = ((lastPriceCall + lastPricePut) * 0.85)/2;
-
-                    Print("Expected Move Value: " + expectedMoveValue);
-                }
-                else
-                {
-                    Print("Error retrieving options chain: " + response.ReasonPhrase);
-                }
-            }
-            catch (Exception ex)
-            {
-                Print("Exception in GetExpectedMoveAsync: " + ex.Message);
+                textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White);
+                strikeLineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.DodgerBlue);
+                tableBorderBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White);
+                tableBackgroundBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color(0, 0, 0, 192)); // More opaque black (75% opacity)
             }
         }
 
-        #endregion
-
-        #region Parsing Methods
-
-        private double ParseIndexPrice(string json)
+        private void DisposeSharpDXResources()
         {
-            // Deserialize the JSON into a dynamic object
-            var obj = jsonSerializer.Deserialize<dynamic>(json);
-
-            // Check if the response status is "ok"
-            if ((string)obj["s"] != "ok")
-            {
-                throw new Exception("API response indicates failure.");
-            }
-
-            // Access the "last" array and get the first element
-            var lastArray = obj["last"] as object[];
-            if (lastArray == null || lastArray.Length == 0)
-            {
-                throw new Exception("No price data available.");
-            }
-
-            double indexPrice = Convert.ToDouble(lastArray[0]);
-            return indexPrice;
+            if (textBrush != null) { textBrush.Dispose(); textBrush = null; }
+            if (strikeLineBrush != null) { strikeLineBrush.Dispose(); strikeLineBrush = null; }
+            if (textFormat != null) { textFormat.Dispose(); textFormat = null; }
+            if (tableTitleFormat != null) { tableTitleFormat.Dispose(); tableTitleFormat = null; }
+            if (tableContentFormat != null) { tableContentFormat.Dispose(); tableContentFormat = null; }
+            if (tableBorderBrush != null) { tableBorderBrush.Dispose(); tableBorderBrush = null; }
+            if (tableBackgroundBrush != null) { tableBackgroundBrush.Dispose(); tableBackgroundBrush = null; }
         }
-
-        private void ParseOptionsChain(string json, out double lastPriceCall, out double lastPricePut)
-        {
-            // Deserialize the JSON into a dynamic object
-            var obj = jsonSerializer.Deserialize<dynamic>(json);
-
-            // Check if the response status is "ok"
-            if ((string)obj["s"] != "ok")
-            {
-                throw new Exception("API response indicates failure.");
-            }
-
-            // Access the "last" array
-            var lastArray = obj["last"] as object[];
-            // Access the "side" array
-            var sideArray = obj["side"] as object[];
-
-            // Initialize the output variables
-            lastPriceCall = 0.0;
-            lastPricePut = 0.0;
-
-            for (int i = 0; i < sideArray.Length; i++)
-            {
-                string side = (string)sideArray[i];
-                double lastPrice = Convert.ToDouble(lastArray[i]);
-
-                if (side == "call")
-                {
-                    lastPriceCall = lastPrice;
-                }
-                else if (side == "put")
-                {
-                    lastPricePut = lastPrice;
-                }
-            }
-        }
-
-        #endregion
-
-        #region Update Methods
-
-        private void PlotAllLines()
-        {
-            // First, update the strike levels
-            UpdateStrikeLevels(indexPrice, futurePrice);
-
-            // Invalidate the chart to trigger OnRender
-            if (ChartControl != null)
-                ChartControl.InvalidateVisual();
-        }
-
-        private void UpdateStrikeLevels(double indexPrice, double futurePrice)
-        {
-            try
-            {
-                // Check if there are any bars loaded
-                if (Count < 1)
-                {
-                    Print("No bars loaded. Exiting UpdateStrikeLevels.");
-                    return;
-                }
-
-                // Clear previous strike levels
-                strikeLevels.Clear();
-                indexStrikes.Clear();
-
-                ratio = futurePrice / indexPrice;
-                double roundedIndexStrike = Math.Floor(indexPrice);
-
-                // Generate strike levels
-                for (int i = -STRIKES_BELOW; i <= STRIKES_ABOVE; i++)
-                {
-                    double indexStrike = roundedIndexStrike + i;
-                    double strikeLevel = indexStrike * ratio;
-                    strikeLevels.Add(strikeLevel);
-                    indexStrikes.Add(indexStrike);
-                }
-
-                Print("Strike levels updated.");
-            }
-            catch (Exception ex)
-            {
-                Print("Exception in UpdateStrikeLevels: " + ex.Message);
-            }
-        }
-
-        private void UpdateMarketStatusOnUI(bool isMarketOpen)
-        {
-            // Update the UI to reflect the market status
-            if (!isMarketOpen)
-            {
-                // Clear any existing strike levels
-                strikeLevels.Clear();
-                indexStrikes.Clear();
-
-                // Remove any drawn objects from the chart
-                RemoveDrawObjects();
-
-                // Optionally, display a message on the chart
-                Draw.TextFixed(this, "MarketClosed", "Market is closed", TextPosition.Center, Brushes.Red, new Gui.Tools.SimpleFont("Arial", 24), Brushes.Transparent, Brushes.Transparent, 0);
-            }
-        }
-
-        #endregion
-
-        #region OnRender Method
 
         protected override void OnRender(ChartControl chartControl, ChartScale chartScale)
         {
             base.OnRender(chartControl, chartScale);
+            Print("OnRender started");
 
-            lock (renderLock)
+            if (RenderTarget == null || textFormat == null || textBrush == null || strikeLineBrush == null)
             {
-                // Ensure we have a RenderTarget
-                if (RenderTarget == null)
-                    return;
+                Print("OnRender - Essential resources are null");
+                return;
+            }
 
-                // Ensure SharpDX resources are available
-                if (textFormat == null || textBrush == null || lineBrush == null || strikeLineBrush == null)
-                    return;
+            Print("Calling PlotStrikeLevels");
+            PlotStrikeLevels(chartControl, chartScale);
 
-                // Plot the expected move lines and text
-                PlotExpectedMoveLines(chartControl, chartScale);
+            Print("Calling DrawVolumeTable");
+            DrawVolumeTable(chartControl);
 
-                // Plot the strike levels and their text
-                PlotStrikeLevels(chartControl, chartScale);
+            // Draw Expected Move levels
+            Print("Calling ExpectedMoveLevels");
+
+            if (isExpectedMoveLevelsCalculated)
+            {
+                DrawExpectedMoveLevel(chartControl, chartScale, fixedExpectedMaxPrice, "Expected Max Price");
+                DrawExpectedMoveLevel(chartControl, chartScale, fixedExpectedMinPrice, "Expected Min Price");
+            }
+            else
+            {
+                Print("Expected move levels not yet calculated");
+            }
+
+            Print("OnRender completed");
+        }
+
+        private SharpDX.Color GetColorForNetAskVolume(double netAskVolume)
+        {
+            // Define the range for color interpolation
+            double maxVolume = 30000; // Adjust this value based on your typical volume range
+
+            // Normalize the netAskVolume to a value between -1 and 1
+            double normalizedVolume = Math.Max(-1, Math.Min(1, netAskVolume / maxVolume));
+
+            byte alpha = 64; // 50% opacity
+
+            if (Math.Abs(normalizedVolume) < 0.1) // Close to zero, use a more vibrant blue
+            {
+                return new SharpDX.Color((byte)65, (byte)105, (byte)225, alpha); // Royal Blue
+            }
+            else if (normalizedVolume < 0) // Negative, use red gradient
+            {
+                byte intensity = (byte)(255 * -normalizedVolume);
+                return new SharpDX.Color(intensity, (byte)0, (byte)0, alpha);
+            }
+            else // Positive, use green gradient
+            {
+                byte intensity = (byte)(255 * normalizedVolume);
+                return new SharpDX.Color((byte)0, intensity, (byte)0, alpha);
             }
         }
 
-		private void PlotExpectedMoveLines(ChartControl chartControl, ChartScale chartScale)
-		{
-		    Print("PlotExpectedMoveLines called. expectedMoveValue: " + expectedMoveValue + ", indexPrice: " + indexPrice);
-
-		    if (expectedMoveValue <= 0 || indexPrice <= 0)
-		    {
-		        Print("Invalid expectedMoveValue or indexPrice. Returning early.");
-		        return;
-		    }
-
-		    double maxMovePrice = (indexPrice + expectedMoveValue) * ratio;
-		    double minMovePrice = (indexPrice - expectedMoveValue) * ratio;
-
-		    float yMax = chartScale.GetYByValue(maxMovePrice);
-		    float yMin = chartScale.GetYByValue(minMovePrice);
-
-		    float xStart = ChartPanel.X; 
-		    float xEnd = ChartPanel.X + ChartPanel.W; 
-
-		    Print("Line coordinates - xStart: " + xStart + ", xEnd: " + xEnd + ", yMax: " + yMax + ", yMin: " + yMin);
-
-		    if (RenderTarget == null)
-		    {
-		        Print("RenderTarget is null. Cannot draw lines.");
-		        return;
-		    }
-			
-			// Create a pale yellow color with transparency
-			SharpDX.Color paleYellowColor = new SharpDX.Color(255,255,224, 128); //RGBA pale yellow with 50% opacity
-			
-			// Create a transparent yellow color for rectangles
-			SharpDX.Color transparentYellowColor = new SharpDX.Color(255,255,0,10); //RGBA yellow wiht 4% opacity
-			
-		    // Change the color to a more visible one
-		    using (var paleYellowBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, paleYellowColor))
-			using (var transparentYellowBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, transparentYellowColor))
-		    {
-		        try
-		        {
-		            // Ensure y-coordinates are within the chart panel
-		            yMax = Math.Max(ChartPanel.Y, Math.Min(yMax, ChartPanel.Y + ChartPanel.H));
-		            yMin = Math.Max(ChartPanel.Y, Math.Min(yMin, ChartPanel.Y + ChartPanel.H));
-					
-					// Calculate rectangle coordinates
-					float yMaxTop = chartScale.GetYByValue(maxMovePrice + 2); 
-					float yMaxBottom = chartScale.GetYByValue(maxMovePrice - 2); 
-					float yMinTop = chartScale.GetYByValue(minMovePrice + 2); 
-					float yMinBottom = chartScale.GetYByValue(minMovePrice - 2); 
-					
-					// Draw rectangles
-					RenderTarget.FillRectangle(
-						new SharpDX.RectangleF(xStart, yMaxTop, xEnd - xStart, yMaxBottom - yMaxTop), 
-						transparentYellowBrush
-					); 
-					RenderTarget.FillRectangle(
-						new SharpDX.RectangleF(xStart, yMinTop, xEnd - xStart, yMinBottom - yMinTop), 
-						transparentYellowBrush
-					); 
-
-		            // Draw the max move line with increased thickness
-		            RenderTarget.DrawLine(new SharpDX.Vector2(xStart, yMax), new SharpDX.Vector2(xEnd, yMax), paleYellowBrush, 2);
-		            Print("Max move line drawn at y = " + yMax);
-
-		            // Draw the min move line with increased thickness
-		            RenderTarget.DrawLine(new SharpDX.Vector2(xStart, yMin), new SharpDX.Vector2(xEnd, yMin), paleYellowBrush, 2);
-		            Print("Min move line drawn at y = " + yMin);
-
-		            // Draw the text labels
-		            //DrawTextLabel("Max 1 Day Move", yMax - 15);
-		            //DrawTextLabel("Min 1 Day Move", yMin + 5);
-		            //Print("Text labels drawn");
-		        }
-		        catch (Exception ex)
-		        {
-		            Print("Exception in PlotExpectedMoveLines: " + ex.Message);
-		        }
-		    }
-
-		    Print("PlotExpectedMoveLines completed.");
-		}
-
         private void PlotStrikeLevels(ChartControl chartControl, ChartScale chartScale)
-
         {
-            // Ensure we have strike levels to draw
-            if (strikeLevels == null || strikeLevels.Count == 0)
-                return;
+            Print("PlotStrikeLevels started");
 
-            // Ensure indexStrikes list has the same count as strikeLevels
-            if (indexStrikes == null || indexStrikes.Count != strikeLevels.Count)
-                return;
-
-            // Get the X coordinates for the start and end of the lines
-            //float xStart = chartControl.GetXByTime(ChartBars.GetTimeByBarIdx(chartControl, ChartBars.FromIndex));
-            //float xEnd = chartControl.GetXByTime(ChartBars.GetTimeByBarIdx(chartControl, ChartBars.ToIndex));
-			float xStart = ChartPanel.X; 
-			float xEnd = ChartPanel.X + ChartPanel.W; 
-
-			
-            for (int i = 0; i < strikeLevels.Count; i++)
+            if (strikeLevels.Count == 0)
             {
-                double strikeLevel = strikeLevels[i];
-                double indexStrike = indexStrikes[i];
+                Print("No strike levels available. Returning.");
+                return;
+            }
 
-                // Convert the price (Y-axis value) to a pixel coordinate
-                float y = chartScale.GetYByValue(strikeLevel);
+            int minCount = Math.Min(
+                Math.Min(strikeLevels.Count, indexStrikes.Count),
+                Math.Min(netAskVolumes.Count, callAskVolumes.Count)
+            );
 
-                // Draw the strike line
-                RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), strikeLineBrush, 1);
-				
-				// Draw rectangle around the strike level
-       			string rectangleTag = IndexTicker + ": RegionHighlight " + indexStrike.ToString();
+            float xStart = ChartPanel.X;
+            float xEnd = ChartPanel.X + ChartPanel.W;
 
-		        // Set area opacity to 4% (areaOpacity ranges from 0 to 255 in SharpDX)
-		        byte areaOpacity = 10; // 4% of 255
-
-		        // Create a semi-transparent brush for the rectangle
-		        using (var areaBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)0, (byte)191, (byte)255, areaOpacity))) // DodgerBlue with opacity
-		        {
-		            // Calculate rectangle coordinates
-		            float yTop = chartScale.GetYByValue(strikeLevel + 2);
-		            float yBottom = chartScale.GetYByValue(strikeLevel - 2);
-
-		            // Draw the rectangle
-		            RenderTarget.FillRectangle(
-		                new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop),
-		                areaBrush
-		            );
-		        }
-
-                // Define the text to display
-                string text = "Strike: " + indexStrike;
-
-                // Create a TextLayout to measure the text size
-                using (var textLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, text, textFormat, float.MaxValue, float.MaxValue))
+            for (int i = 0; i < minCount; i++)
+            {
+                try
                 {
-                    // Get the width and height of the text
-                    float textWidth = textLayout.Metrics.Width;
-                    float textHeight = textLayout.Metrics.Height;
+                    double strikeLevel = strikeLevels[i];
+                    double indexStrike = indexStrikes[i];
+                    double netAskVolume = netAskVolumes[i];
+                    float y = chartScale.GetYByValue(strikeLevel);
+                    double callAskVolume = callAskVolumes[i];
+                    double putAskVolume = putAskVolumes[i];
 
-                    // Calculate X-coordinate: right edge minus text width minus padding
-                    float x = (float)ChartPanel.X + (float)ChartPanel.W - textWidth - 10; // 10 pixels padding from the right edge
+                    SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume);
 
-                    // Adjust Y-coordinate to center the text vertically at the adjusted y
-                    float yText = y - textHeight / 2 - 4; // Slightly above the line
+                    // Draw the line
+                    using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)65, (byte)105, (byte)225, (byte)64))) // Royal Blue with 50% opacity
+                    {
+                        RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 2);
+                    }
 
-                    // Draw the text
-                    RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yText), textLayout, textBrush);
+                    // Calculate rectangle coordinates
+                    float yTop = chartScale.GetYByValue(strikeLevel + 1);
+                    float yBottom = chartScale.GetYByValue(strikeLevel - 1);
+
+                    // Draw the rectangle
+                    using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, rectangleColor))
+                    {
+                        RenderTarget.FillRectangle(
+                            new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop),
+                            rectangleBrush
+                        );
+                    }
+
+                    // Prepare text for display
+                    string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
+                    string netAskVolumeText = "Net $$ Vol: " + FormatVolume(netAskVolume);
+
+                    using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
+                    using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
+                    using (var netAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
+                    {
+                        float strikeTextWidth = strikeTextLayout.Metrics.Width;
+                        float strikeTextHeight = strikeTextLayout.Metrics.Height;
+                        float netAskVolumeTextHeight = netAskVolumeTextLayout.Metrics.Height;
+
+                        float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, netAskVolumeTextLayout.Metrics.Width) - 5;
+                        
+                        // Position text elements
+                        float yStrikeText = y - 10 ;
+                        float yNetAskVolumeText = yStrikeText + strikeTextHeight;
+
+                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
+                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetAskVolumeText), netAskVolumeTextLayout, textBrush);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Print("Error plotting strike level " + i + ": " + ex.Message);
+                }
+            }
+
+            Print("PlotStrikeLevels completed");
+        }
+
+        private void DrawExpectedMoveLevel(ChartControl chartControl, ChartScale chartScale, double price, string label)
+        {
+            Print("DrawExpectedMoveLevel started for " + label + " Price: " + price);
+
+            float y = chartScale.GetYByValue(price);
+
+            float xStart = ChartPanel.X;
+            float xEnd = ChartPanel.X + ChartPanel.W;
+
+            // Draw the line
+            using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)255, (byte)255, (byte)0, (byte)64))) // Pale yellow with 50% opacity
+            {
+                RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 2);
+            }
+
+            // Draw the rectangle
+            using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)255, (byte)255, (byte)0, (byte)32))) // Pale yellow with 25% opacity
+            {
+                float yTop = chartScale.GetYByValue(price + 0.25);
+                float yBottom = chartScale.GetYByValue(price - 0.25);
+                RenderTarget.FillRectangle(new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop), rectangleBrush);
+            }
+
+            Print("DrawExpectedMoveLevel completed for " + label);
+        }
+
+        private string FormatVolume(double volume)
+        {
+            // Convert the volume to hundreds
+            double volumeInHundreds = volume * 100;
+            string sign = volumeInHundreds < 0 ? "-" : "";
+            return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
+        }
+        private void DrawVolumeTable(ChartControl chartControl)
+        {
+            Print("DrawVolumeTable started");
+
+            float tableWidth = 300;
+            float tableHeight = 110; // Increased height to accommodate the new row
+            float padding = 10;
+            float labelWidth = 120;
+            float titleHeight = 30;
+            float rowHeight = 20;
+
+            // Use ChartPanel properties for positioning
+            float x = ChartPanel.W - tableWidth - padding;
+            float y = ChartPanel.H - tableHeight - padding;
+
+            // Draw table background
+            RenderTarget.FillRectangle(new SharpDX.RectangleF(x, y, tableWidth, tableHeight), tableBackgroundBrush);
+
+            // Draw table border
+            RenderTarget.DrawRectangle(new SharpDX.RectangleF(x, y, tableWidth, tableHeight), tableBorderBrush);
+
+            // Prepare the text to display
+            string statusText = null;
+            if (!isLoggedIn)
+            {
+                statusText = "Login failed. Please check your credentials.";
+            }
+            else if (!isDataFetched)
+            {
+                statusText = "Failed to fetch options data. Please check your connection.";
+            }
+            else if (strikeLevels.Count == 0)
+            {
+                statusText = "No options data available.";
+            }
+
+            if (statusText != null)
+            {
+                // Draw status message instead of normal content
+                // Center the title
+                tableTitleFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+                RenderTarget.DrawText("Status", tableTitleFormat, new SharpDX.RectangleF(x, y, tableWidth, titleHeight), textBrush);
+                RenderTarget.DrawText(statusText, tableContentFormat, new SharpDX.RectangleF(x + 5, y + titleHeight, tableWidth - 10, tableHeight - titleHeight), textBrush);
+            }
+            else
+            {
+                // Draw normal volume table content
+                // Center the title
+                tableTitleFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
+                RenderTarget.DrawText("Summary", tableTitleFormat, new SharpDX.RectangleF(x, y, tableWidth, titleHeight), textBrush);
+
+                // Draw table content
+                float contentY = y + titleHeight;
+                float valueX = x + labelWidth;
+
+                // Underlying Symbol
+                RenderTarget.DrawText("Underlying:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText(underlyingSymbol, tableContentFormat, new SharpDX.RectangleF(valueX, contentY, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+                // Last Update Time
+                RenderTarget.DrawText("Last Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 1 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText(FormatTimestamp(lastUpdateTimestamp), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 1 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+                // Total Ask Volume
+                RenderTarget.DrawText("Total Net $$ Vol:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 2 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+                // Time Since Last Update
+                RenderTarget.DrawText("Time Since Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
+                
+                // Calculate time since last update
+                long currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                long secondsSinceUpdate = currentTimestamp - lastUpdateTimestamp;
+                string timeSinceUpdateStr = secondsSinceUpdate + " seconds";
+                
+                RenderTarget.DrawText(timeSinceUpdateStr, tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+            }
+
+            Print("DrawVolumeTable completed");
+        }
+
+        private string FormatVolumeForDisplay(double volume)
+        {
+            // Convert the volume to hundreds
+            double volumeInHundreds = volume * 100;
+            string sign = volumeInHundreds < 0 ? "-" : "";
+            return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
+        }
+
+        private async Task ConnectWebSocket()
+        {
+            int maxRetries = 3;
+            int retryDelay = 5000; // 5 seconds
+
+            for (int i = 0; i < maxRetries; i++)
+            {
+                if (string.IsNullOrEmpty(bearerToken))
+                {
+                    Print("Bearer token is not set. Cannot connect to WebSocket.");
+                    return;
+                }
+
+                Print("Attempting WebSocket connection (attempt " + (i + 1) + " of " + maxRetries + ")");
+                try
+                {
+                    var wsUri = new Uri(WebSocketUrl + "?token=" + bearerToken);
+                    await webSocket.ConnectAsync(wsUri, cts.Token);
+                    Print("WebSocket connection established");
+                    Task.Run(() => ReceiveWebSocketMessages());
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Print("WebSocket connection attempt " + (i + 1) + " failed: " + ex.Message);
+                }
+
+                if (i < maxRetries - 1)
+                {
+                    Print("Retrying in " + (retryDelay / 1000) + " seconds...");
+                    await Task.Delay(retryDelay);
+                }
+                else
+                {
+                    Print("Max retries reached. " + "WebSocket connection failed.");
                 }
             }
         }
 
-        private void DrawTextLabel(string text, float yPosition)
+        private async Task ReceiveWebSocketMessages()
         {
-            // Create a TextLayout to measure the text size
-            using (var textLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, text, textFormat, float.MaxValue, float.MaxValue))
+            var buffer = new byte[1024 * 4];
+            while (webSocket.State == WebSocketState.Open)
             {
-                // Get the width and height of the text
-                float textWidth = textLayout.Metrics.Width;
-                float textHeight = textLayout.Metrics.Height;
+                WebSocketReceiveResult result;
+                using (var ms = new MemoryStream())
+                {
+                    do
+                    {
+                        result = await webSocket.ReceiveAsync(new ArraySegment<byte>(buffer), cts.Token);
+                        ms.Write(buffer, 0, result.Count);
+                    }
+                    while (!result.EndOfMessage);
 
-                // Calculate X-coordinate: right edge minus text width minus padding
-                float x = (float)ChartPanel.X + (float)ChartPanel.W - textWidth - 10; // 10 pixels padding from the right edge
+                    ms.Seek(0, SeekOrigin.Begin);
+                    using (var reader = new StreamReader(ms, Encoding.UTF8))
+                    {
+                        string message = await reader.ReadToEndAsync();
+                        ProcessWebSocketMessage(message);
+                    }
+                }
 
-                // Draw the text
-                RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yPosition), textLayout, textBrush);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    await webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, cts.Token);
+                    Print("WebSocket connection closed");
+                    return;
+                }
             }
         }
 
-        #endregion
+        private void ProcessWebSocketMessage(string message)
+        {
+            try
+            {
+                var data = jsonSerializer.Deserialize<Dictionary<string, object>>(message);
+                if (data.ContainsKey("type") && data["type"].ToString() == "chunk")
+                {
+                    int chunkIndex = Convert.ToInt32(data["chunkIndex"]);
+                    int totalChunks = Convert.ToInt32(data["totalChunks"]);
+                    string chunkData = data["data"].ToString();
+
+                    // Ensure the messageChunks list has enough capacity
+                    while (messageChunks.Count <= chunkIndex)
+                    {
+                        messageChunks.Add(null);
+                    }
+
+                    messageChunks[chunkIndex] = chunkData;
+
+                    if (messageChunks.Count(chunk => chunk != null) == totalChunks)
+                    {
+                        string fullMessage = string.Join("", messageChunks);
+                        messageChunks.Clear(); // Reset for next message
+
+                        ProcessReassembledMessage(fullMessage);
+                    }
+                }
+                else
+                {
+                    // Handle other message types if any
+                    Print("Received non-chunk message: " + message);
+                    ProcessReassembledMessage(message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Print("Error processing WebSocket message: " + ex.Message);
+            }
+        }
+
+        private void ProcessReassembledMessage(string fullMessage)
+        {
+            try
+            {
+                string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                Print("[" + timestamp + "] Received new message");
+
+                var data = jsonSerializer.Deserialize<Dictionary<string, object>>(fullMessage);
+                if (data.ContainsKey("type") && data["type"].ToString() == "update")
+                {
+                    Print("[" + timestamp + "] Received new options chain data");
+                    if (data.ContainsKey("data"))
+                    {
+                        var optionsData = jsonSerializer.Serialize(data["data"]);
+                        ProcessOptionsData(optionsData);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Print("Error processing reassembled message: " + ex.Message);
+            }
+        }
+
+        private void DisconnectWebSocket()
+        {
+            cts.Cancel();
+            if (webSocket.State == WebSocketState.Open)
+            {
+                webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, string.Empty, CancellationToken.None).Wait();
+            }
+            webSocket.Dispose();
+            cts.Dispose();
+        }
 
         #region Properties
+        [NinjaScriptProperty]
+        [Display(Name = "Username", Order = 1, GroupName = "Parameters")]
+        public string Username { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "APIToken", Description = "MarketData.app API token", Order = 1, GroupName = "Parameters")]
-        public string APIToken
-        { get; set; }
+        [Display(Name = "Password", Order = 2, GroupName = "Parameters")]
+        public string Password { get; set; }
 
         [NinjaScriptProperty]
-        [Display(Name = "IndexTicker", Description = "Index Ticker Symbol", Order = 2, GroupName = "Parameters")]
-        public string IndexTicker
-        { get; set; }
-
+        [Display(Name = "WebSocket URL", Order = 3, GroupName = "Parameters")]
+        public string WebSocketUrl { get; set; }
         #endregion
 
     }
@@ -628,19 +897,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
-		private IndexStrikesv2[] cacheIndexStrikesv2;
-		public IndexStrikesv2 IndexStrikesv2(string aPIToken, string indexTicker)
+		private KriyaFXIndexStrikes[] cacheKriyaFXIndexStrikes;
+		public KriyaFXIndexStrikes KriyaFXIndexStrikes(string username, string password, string webSocketUrl)
 		{
-			return IndexStrikesv2(Input, aPIToken, indexTicker);
+			return KriyaFXIndexStrikes(Input, username, password, webSocketUrl);
 		}
 
-		public IndexStrikesv2 IndexStrikesv2(ISeries<double> input, string aPIToken, string indexTicker)
+		public KriyaFXIndexStrikes KriyaFXIndexStrikes(ISeries<double> input, string username, string password, string webSocketUrl)
 		{
-			if (cacheIndexStrikesv2 != null)
-				for (int idx = 0; idx < cacheIndexStrikesv2.Length; idx++)
-					if (cacheIndexStrikesv2[idx] != null && cacheIndexStrikesv2[idx].APIToken == aPIToken && cacheIndexStrikesv2[idx].IndexTicker == indexTicker && cacheIndexStrikesv2[idx].EqualsInput(input))
-						return cacheIndexStrikesv2[idx];
-			return CacheIndicator<IndexStrikesv2>(new IndexStrikesv2(){ APIToken = aPIToken, IndexTicker = indexTicker }, input, ref cacheIndexStrikesv2);
+			if (cacheKriyaFXIndexStrikes != null)
+				for (int idx = 0; idx < cacheKriyaFXIndexStrikes.Length; idx++)
+					if (cacheKriyaFXIndexStrikes[idx] != null && cacheKriyaFXIndexStrikes[idx].Username == username && cacheKriyaFXIndexStrikes[idx].Password == password && cacheKriyaFXIndexStrikes[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXIndexStrikes[idx].EqualsInput(input))
+						return cacheKriyaFXIndexStrikes[idx];
+			return CacheIndicator<KriyaFXIndexStrikes>(new KriyaFXIndexStrikes(){ Username = username, Password = password, WebSocketUrl = webSocketUrl }, input, ref cacheKriyaFXIndexStrikes);
 		}
 	}
 }
@@ -649,14 +918,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.IndexStrikesv2 IndexStrikesv2(string aPIToken, string indexTicker)
+		public Indicators.KriyaFXIndexStrikes KriyaFXIndexStrikes(string username, string password, string webSocketUrl)
 		{
-			return indicator.IndexStrikesv2(Input, aPIToken, indexTicker);
+			return indicator.KriyaFXIndexStrikes(Input, username, password, webSocketUrl);
 		}
 
-		public Indicators.IndexStrikesv2 IndexStrikesv2(ISeries<double> input , string aPIToken, string indexTicker)
+		public Indicators.KriyaFXIndexStrikes KriyaFXIndexStrikes(ISeries<double> input , string username, string password, string webSocketUrl)
 		{
-			return indicator.IndexStrikesv2(input, aPIToken, indexTicker);
+			return indicator.KriyaFXIndexStrikes(input, username, password, webSocketUrl);
 		}
 	}
 }
@@ -665,14 +934,14 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.IndexStrikesv2 IndexStrikesv2(string aPIToken, string indexTicker)
+		public Indicators.KriyaFXIndexStrikes KriyaFXIndexStrikes(string username, string password, string webSocketUrl)
 		{
-			return indicator.IndexStrikesv2(Input, aPIToken, indexTicker);
+			return indicator.KriyaFXIndexStrikes(Input, username, password, webSocketUrl);
 		}
 
-		public Indicators.IndexStrikesv2 IndexStrikesv2(ISeries<double> input , string aPIToken, string indexTicker)
+		public Indicators.KriyaFXIndexStrikes KriyaFXIndexStrikes(ISeries<double> input , string username, string password, string webSocketUrl)
 		{
-			return indicator.IndexStrikesv2(input, aPIToken, indexTicker);
+			return indicator.KriyaFXIndexStrikes(input, username, password, webSocketUrl);
 		}
 	}
 }
