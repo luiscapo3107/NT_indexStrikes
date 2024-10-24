@@ -94,8 +94,9 @@ namespace NinjaTrader.NinjaScript.Indicators
         // Dictionary to store previous net ask volume data per strike
         private Dictionary<double, NetAskVolumeData> previousNetAskVolumeData = new Dictionary<double, NetAskVolumeData>();
 
-        private double totalLiquidity;
-        private List<double> netLiquidityList = new List<double>();
+        // Variables to store previous total ask volume and timestamp
+        private double previousTotalAskVolume = 0;
+        private long previousTotalAskVolumeTimestamp = 0;
 
         protected override void OnStateChange()
         {
@@ -370,7 +371,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                     netAskVolumes.Clear();
                     callAskVolumes.Clear();
                     putAskVolumes.Clear();
-                    netLiquidityList.Clear();
 
                     foreach (var item in optionsData)
                     {
@@ -384,10 +384,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                             var put = item["put"] as Dictionary<string, object>;
 
                             double callAskVolume = call.ContainsKey("ASK_Volume") ? Convert.ToDouble(call["ASK_Volume"]) : 0;
-                            double putAskVolume = put.ContainsKey("ASK_Volume") ? Convert.ToDouble(call["ASK_Volume"]) : 0;
-                            
-                            // Default values if not present
-                            double netLiquidity = item.ContainsKey("Net_Liquidity") ? Convert.ToDouble(item["Net_Liquidity"]) : 0;
+                            double putAskVolume = put.ContainsKey("ASK_Volume") ? Convert.ToDouble(put["ASK_Volume"]) : 0;
 
                             // Update the dictionaries with current values
                             previousNetAskVolumeData[futureStrike] = new NetAskVolumeData
@@ -396,13 +393,12 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 NetAskVolumeTimestamp = lastUpdateTimestamp
                             };
 
-                            // Add all values to lists
+                            // Add all values to lists, using default values if necessary
                             indexStrikes.Add(indexStrike);
                             strikeLevels.Add(futureStrike);
                             netAskVolumes.Add(netAskVolume);
                             callAskVolumes.Add(callAskVolume);
                             putAskVolumes.Add(putAskVolume);
-                            netLiquidityList.Add(netLiquidity);
                         }
                     }
 
@@ -414,11 +410,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                     if (options.ContainsKey("Total_GEX_Volume"))
                     {
                         totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
-                    }
-
-                    if (options.ContainsKey("Total_Liquidity"))
-                    {
-                        totalLiquidity = Convert.ToDouble(options["Total_Liquidity"]);
                     }
 
                     isDataFetched = true;
@@ -554,11 +545,9 @@ namespace NinjaTrader.NinjaScript.Indicators
                 return;
             }
 
-            int minCount = Math.Min(
-                Math.Min(strikeLevels.Count, indexStrikes.Count),
-                Math.Min(netAskVolumes.Count, callAskVolumes.Count)
-            );
-            minCount = Math.Min(minCount, Math.Min(putAskVolumes.Count, netLiquidityList.Count));
+            int minCount = Math.Min(strikeLevels.Count, indexStrikes.Count);
+			minCount = Math.Min(minCount, netAskVolumes.Count);
+            minCount = Math.Min(minCount, Math.Min(callAskVolumes.Count, putAskVolumes.Count));
 
             float xStart = ChartPanel.X;
             float xEnd = ChartPanel.X + ChartPanel.W;
@@ -571,7 +560,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                     double indexStrike = indexStrikes[i];
                     double netAskVolume = netAskVolumes[i];
                     float y = chartScale.GetYByValue(strikeLevel);
-                    double netLiquidity = netLiquidityList[i];
                     double callAskVolume = callAskVolumes[i];
                     double putAskVolume = putAskVolumes[i];
 
@@ -601,41 +589,33 @@ namespace NinjaTrader.NinjaScript.Indicators
                     string callVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume);
                     string putVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume);
                     string netAskVolumeText = "Net $$ Vol: " + FormatVolume(netAskVolume);
-                    string netLiquidityText = "Net Liquidity: " + FormatLiquidity(netLiquidity);
 
                     using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
                     using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
                     using (var callVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, callVolumeText, textFormat, float.MaxValue, float.MaxValue))
                     using (var putVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, putVolumeText, textFormat, float.MaxValue, float.MaxValue))
                     using (var netAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
-                    using (var netLiquidityTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netLiquidityText, textFormat, float.MaxValue, float.MaxValue))
                     {
                         float strikeTextWidth = strikeTextLayout.Metrics.Width;
                         float strikeTextHeight = strikeTextLayout.Metrics.Height;
                         float callVolumeTextHeight = callVolumeTextLayout.Metrics.Height;
                         float putVolumeTextHeight = putVolumeTextLayout.Metrics.Height;
                         float netAskVolumeTextHeight = netAskVolumeTextLayout.Metrics.Height;
-                        float netLiquidityTextHeight = netLiquidityTextLayout.Metrics.Height;
 
                         float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, 
                             Math.Max(callVolumeTextLayout.Metrics.Width, 
                             Math.Max(putVolumeTextLayout.Metrics.Width, 
-                            Math.Max(netAskVolumeTextLayout.Metrics.Width, 
-                            netLiquidityTextLayout.Metrics.Width)))) - 5;
+                            netAskVolumeTextLayout.Metrics.Width))) - 5;
                         
                         // Position text elements
                         float yStrikeText = y - 30 ;
-
-                        float yNetAskVolumeText = yStrikeText + strikeTextHeight;
+                        float yNetAskVolumeText = yStrikeText + strikeTextHeight; 
                         float yCallVolumeText = yNetAskVolumeText + netAskVolumeTextHeight;
                         float yPutVolumeText = yCallVolumeText + callVolumeTextHeight;
-                        float yNetLiquidityText = yPutVolumeText + putVolumeTextHeight;
-
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetAskVolumeText), netAskVolumeTextLayout, textBrush);
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yCallVolumeText), callVolumeTextLayout, textBrush);
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yPutVolumeText), putVolumeTextLayout, textBrush);
-                        RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetLiquidityText), netLiquidityTextLayout, textBrush);
                     }
                 }
                 catch (Exception ex)
@@ -681,24 +661,12 @@ namespace NinjaTrader.NinjaScript.Indicators
             return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
         }
 
-        private string FormatRate(double rate)
-        {
-            string sign = rate < 0 ? "-" : "";
-            return sign + "$" + String.Format("{0:N2}", Math.Abs(rate)).Replace(",", ".") + "/s";
-        }
-
-        private string FormatAcceleration(double acceleration)
-        {
-            string sign = acceleration < 0 ? "-" : "";
-            return sign + "$" + String.Format("{0:N2}", Math.Abs(acceleration)).Replace(",", ".") + "/s²";
-        }
-
         private void DrawVolumeTable(ChartControl chartControl)
         {
             Print("DrawVolumeTable started");
 
             float tableWidth = 300;
-            float tableHeight = 150; // Increased height to accommodate the new row
+            float tableHeight = 130; // Increased height to accommodate the new row
             float padding = 10;
             float labelWidth = 120;
             float titleHeight = 30;
@@ -760,28 +728,18 @@ namespace NinjaTrader.NinjaScript.Indicators
                 RenderTarget.DrawText("Total Net $$ Vol:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
                 RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 2 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
 
-                // Total Liquidity
-                RenderTarget.DrawText("Total Liquidity:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
-                RenderTarget.DrawText(FormatLiquidity(totalLiquidity), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
-
                 // Time Since Last Update
-                RenderTarget.DrawText("Time Since Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 4 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText("Time Since Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
                 
                 // Calculate time since last update
                 long currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 long secondsSinceUpdate = currentTimestamp - lastUpdateTimestamp;
                 string timeSinceUpdateStr = secondsSinceUpdate + " seconds";
                 
-                RenderTarget.DrawText(timeSinceUpdateStr, tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 4 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+                RenderTarget.DrawText(timeSinceUpdateStr, tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
             }
 
             Print("DrawVolumeTable completed");
-        }
-
-        // Add this method to format the liquidity value
-        private string FormatLiquidity(double liquidity)
-        {
-            return "$"+ liquidity.ToString("F2");
         }
 
         private string FormatVolumeForDisplay(double volume)
@@ -1019,6 +977,3 @@ namespace NinjaTrader.NinjaScript.Strategies
 }
 
 #endregion
-
-
-
