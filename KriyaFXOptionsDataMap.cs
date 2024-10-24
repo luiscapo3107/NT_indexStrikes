@@ -117,7 +117,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                     Username = string.Empty;
                     Password = string.Empty;
                     WebSocketUrl = "ws://localhost:3000";
-                    SmoothingFactor = 0.5; // Default value
                     Print("KriyaFXOptionsMap: SetDefaults completed");
                 }
                 else if (State == State.Configure)
@@ -959,11 +958,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         [NinjaScriptProperty]
         [Display(Name = "WebSocket URL", Order = 3, GroupName = "Parameters")]
         public string WebSocketUrl { get; set; }
-
-        [NinjaScriptProperty]
-        [Range(0, 1)]
-        [Display(Name = "Smoothing Factor", Description = "EMA smoothing factor (0-1)", Order = 4, GroupName = "Parameters")]
-        public double SmoothingFactor { get; set; }
         #endregion
 
     }
@@ -976,18 +970,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private KriyaFXOptionsMap[] cacheKriyaFXOptionsMap;
-		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double smoothingFactor)
+		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl)
 		{
-			return KriyaFXOptionsMap(Input, username, password, webSocketUrl, smoothingFactor);
+			return KriyaFXOptionsMap(Input, username, password, webSocketUrl);
 		}
 
-		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password, string webSocketUrl, double smoothingFactor)
+		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password, string webSocketUrl)
 		{
 			if (cacheKriyaFXOptionsMap != null)
 				for (int idx = 0; idx < cacheKriyaFXOptionsMap.Length; idx++)
-					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXOptionsMap[idx].SmoothingFactor == smoothingFactor && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
+					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
 						return cacheKriyaFXOptionsMap[idx];
-			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password, WebSocketUrl = webSocketUrl, SmoothingFactor = smoothingFactor }, input, ref cacheKriyaFXOptionsMap);
+			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password, WebSocketUrl = webSocketUrl }, input, ref cacheKriyaFXOptionsMap);
 		}
 	}
 }
@@ -996,14 +990,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double smoothingFactor)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, smoothingFactor);
+			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double smoothingFactor)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, smoothingFactor);
+			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl);
 		}
 	}
 }
@@ -1012,18 +1006,19 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double smoothingFactor)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, smoothingFactor);
+			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double smoothingFactor)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, smoothingFactor);
+			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl);
 		}
 	}
 }
 
 #endregion
+
 
 
