@@ -699,7 +699,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             Print("DrawVolumeTable started");
 
             float tableWidth = 300;
-            float tableHeight = 170; // Increased height to accommodate the new row
+            float tableHeight = 150; // Increased height to accommodate the new row
             float padding = 10;
             float labelWidth = 120;
             float titleHeight = 30;
@@ -760,9 +760,20 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // Total Ask Volume
                 RenderTarget.DrawText("Total Net $$ Vol:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
                 RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 2 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
                 // Total Liquidity
                 RenderTarget.DrawText("Total Liquidity:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
                 RenderTarget.DrawText(FormatLiquidity(totalLiquidity), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+                // Time Since Last Update
+                RenderTarget.DrawText("Time Since Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 4 * rowHeight, labelWidth, rowHeight), textBrush);
+                
+                // Calculate time since last update
+                long currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+                long secondsSinceUpdate = currentTimestamp - lastUpdateTimestamp;
+                string timeSinceUpdateStr = secondsSinceUpdate + " seconds";
+                
+                RenderTarget.DrawText(timeSinceUpdateStr, tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 4 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
             }
 
             Print("DrawVolumeTable completed");
@@ -1014,3 +1025,5 @@ namespace NinjaTrader.NinjaScript.Strategies
 }
 
 #endregion
+
+
