@@ -52,6 +52,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private double futurePrice;
         private double indexPrice;
+        private double currentRatio;
+        private Queue<double> ratioHistory = new Queue<double>(10); // Store last 10 ratios
 
         private List<double> netAskVolumes = new List<double>();
         private List<double> callAskVolumes = new List<double>();
@@ -259,7 +261,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         }
 
         private double GetFuturePriceAtTimestamp(long timestamp)
-        {
+        {//TODO: FIX PROBLEM WITH GETTING FUTURE PRICE AT TIMESTAMP DEPENDING ON BAR SIZE OF CHART (15' makes problems!) 
             // Convert Unix timestamp to DateTime
             var barTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(timestamp).ToLocalTime();
 
@@ -285,6 +287,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // If still no match, return the current ask price as a fallback
                 Print("No historical data found for the specified timestamp. Using current ask price.");
                 return GetCurrentAsk();
+            }
+        }
+
+        private void UpdateRatio()
+        {
+            if (futurePrice > 0 && indexPrice > 0)
+            {
+                double newRatio = futurePrice / indexPrice;
+                ratioHistory.Enqueue(newRatio);
+                if (ratioHistory.Count > 10)
+                    ratioHistory.Dequeue();
+
+                currentRatio = ratioHistory.Average(); // Simple moving average of the ratio
             }
         }
 
@@ -334,7 +349,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                         var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
 
                         indexPrice = Convert.ToDouble(data["Price"]);
-                        fixedRatio = futurePrice / indexPrice;
+                        UpdateRatio(); // Update the ratio history
+                        fixedRatio = currentRatio; // Use the moving average ratio
                         isRatioCalculated = true;
 
                         Print("Initial Future Price (at timestamp): " + futurePrice);
@@ -343,8 +359,12 @@ namespace NinjaTrader.NinjaScript.Indicators
                     }
                     else
                     {
-                        // Use the fixed ratio for calculations, but update the index price
+                        // Update index price and recalculate ratio
                         indexPrice = Convert.ToDouble(data["Price"]);
+                        futurePrice = GetCurrentAsk(); // Get the current future price
+                        UpdateRatio();
+                        
+                        // Use the fixed ratio for calculations
                         futurePrice = indexPrice * fixedRatio;
                     }
 
@@ -514,7 +534,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private SharpDX.Color GetColorForNetAskVolume(double netAskVolume, double callAskVolume, double putAskVolume)
         {
-            double maxVolume = 40000; // Adjust this value based on your typical volume range
+            double maxVolume = 30000; // Adjust this value based on your typical volume range
             byte alpha = 64; // 50% opacity
             double strikeMoneyThresholdMillions = StrikeMoneyThreshold * 10000;
             double strikeMoneyAlertMillions = StrikeMoneyAlert * 10000;
@@ -1003,3 +1023,4 @@ namespace NinjaTrader.NinjaScript.Strategies
 }
 
 #endregion
+
