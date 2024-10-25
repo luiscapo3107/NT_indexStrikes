@@ -534,13 +534,13 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private SharpDX.Color GetColorForNetAskVolume(double netAskVolume, double callAskVolume, double putAskVolume)
         {
-            double maxVolume = 30000; // Adjust this value based on your typical volume range
+            double maxVolume = 3000000; // Adjust this value based on your typical volume range
             byte alpha = 64; // 50% opacity
             double strikeMoneyThresholdMillions = StrikeMoneyThreshold * 10000;
             double strikeMoneyAlertMillions = StrikeMoneyAlert * 10000;
 
             // Check if the dominant value is over the user-defined threshold
-            double dominantValue = Math.Max(callAskVolume, putAskVolume);
+            double dominantValue = Math.Max(Math.Abs(callAskVolume), Math.Abs(putAskVolume));
             
             // Use logarithmic scale for better differentiation at higher values
             double logNormalizedVolume = Math.Log10(1 + (9 * Math.Min(1, dominantValue / maxVolume)));
@@ -567,7 +567,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             else
             {
                 // Use blue for all other cases
-                byte intensity = (byte)(65 + 190 * logNormalizedVolume); // Range from 65 to 255
+                byte intensity = (byte)(128 + 127 * logNormalizedVolume); // Range from 65 to 255
                 return new SharpDX.Color((byte)65, (byte)105, intensity, alpha); // Royal Blue gradient
             }
         }
