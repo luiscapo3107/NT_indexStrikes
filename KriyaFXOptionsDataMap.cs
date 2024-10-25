@@ -539,36 +539,36 @@ namespace NinjaTrader.NinjaScript.Indicators
             double strikeMoneyThresholdMillions = StrikeMoneyThreshold * 10000;
             double strikeMoneyAlertMillions = StrikeMoneyAlert * 10000;
 
-            // Normalize the netAskVolume to a value between -1 and 1
-            double normalizedVolume = Math.Max(-1, Math.Min(1, netAskVolume / maxVolume));
-
-            // Check if the dominant value is over the user-defined threshold and the difference is over the user-defined threshold
+            // Check if the dominant value is over the user-defined threshold
             double dominantValue = Math.Max(callAskVolume, putAskVolume);
-            double difference = Math.Abs(netAskVolume);
+            
+            // Use logarithmic scale for better differentiation at higher values
+            double logNormalizedVolume = Math.Log10(1 + (9 * Math.Min(1, dominantValue / maxVolume)));
 
             if (dominantValue > strikeMoneyThresholdMillions)
             {
                 // Apply gradient based on the normalized net ask volume
+                byte intensity = (byte)(64 + 191 * logNormalizedVolume); // Range from 64 to 255
                 if (netAskVolume < 0) // Negative, use red gradient
                 {
-                    byte intensity = (byte)(255 * Math.Abs(normalizedVolume));
                     return new SharpDX.Color(intensity, (byte)0, (byte)0, alpha);
                 }
                 else // Positive, use green gradient
                 {
-                    byte intensity = (byte)(255 * normalizedVolume);
                     return new SharpDX.Color((byte)0, intensity, (byte)0, alpha);
                 }
             }
             else if (dominantValue > strikeMoneyAlertMillions && dominantValue < strikeMoneyThresholdMillions)
             {
                 // Use yellow for values between strikeMoneyAlert and strikeMoneyThreshold
-                return new SharpDX.Color((byte)255, (byte)255, (byte)0, alpha); // Yellow gradient
+                byte intensity = (byte)(128 + 127 * logNormalizedVolume); // Range from 128 to 255
+                return new SharpDX.Color(intensity, intensity, (byte)0, alpha); // Yellow gradient
             }
             else
             {
                 // Use blue for all other cases
-                return new SharpDX.Color((byte)65, (byte)105, (byte)225, alpha); // Royal Blue
+                byte intensity = (byte)(65 + 190 * logNormalizedVolume); // Range from 65 to 255
+                return new SharpDX.Color((byte)65, (byte)105, intensity, alpha); // Royal Blue gradient
             }
         }
 
