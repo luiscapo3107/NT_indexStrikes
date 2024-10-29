@@ -566,8 +566,8 @@ namespace NinjaTrader.NinjaScript.Indicators
         {
             double maxVolume = 3000000; // Adjust this value based on your typical volume range
             byte alpha = 64; // 50% opacity
-            double strikeMoneyThresholdMillions = StrikeMoneyThreshold * 10000;
-            double strikeMoneyAlertMillions = StrikeMoneyAlert * 10000;
+            double strikeMoneyThresholdMillions = StrikeMoneyThreshold * 1000000;
+            double strikeMoneyAlertMillions = StrikeMoneyAlert * 1000000;
 
             // Check if the dominant value is over the user-defined threshold
             double dominantValue = Math.Max(Math.Abs(callAskVolume), Math.Abs(putAskVolume));
