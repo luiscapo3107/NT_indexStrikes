@@ -33,7 +33,7 @@ using System.IO;
 //This namespace holds Indicators in this folder and is required. Do not change it.
 namespace NinjaTrader.NinjaScript.Indicators
 {
-    public class KriyaFXOptionsMap : Indicator
+    public class KriyaFXIndeStrikes : Indicator
     {
         private HttpClient httpClient;
         private string bearerToken;
@@ -41,6 +41,9 @@ namespace NinjaTrader.NinjaScript.Indicators
         private List<double> strikeLevels = new List<double>();
         private List<double> indexStrikes = new List<double>();
         private double currentPrice;
+
+     private double currentRatio;
+        private Queue<double> ratioHistory = new Queue<double>(10); // Store last 10 ratios
 
         // SharpDX Resources
         private SharpDX.DirectWrite.TextFormat textFormat;
@@ -52,8 +55,6 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private double futurePrice;
         private double indexPrice;
-        private double currentRatio;
-        private Queue<double> ratioHistory = new Queue<double>(10); // Store last 10 ratios
 
         private List<double> netAskVolumes = new List<double>();
         private List<double> callAskVolumes = new List<double>();
@@ -107,7 +108,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                 if (State == State.SetDefaults)
                 {
                     Description = @"Retrieves and plots Options Data from the KriyaFX service";
-                    Name = "KriyaFXOptionsMap";
+                    Name = "KriyaFXIndeStrikes";
                     Calculate = Calculate.OnBarClose;
                     IsOverlay = true;
                     DisplayInDataBox = true;
@@ -117,14 +118,10 @@ namespace NinjaTrader.NinjaScript.Indicators
                     PaintPriceMarkers = true;
                     ScaleJustification = NinjaTrader.Gui.Chart.ScaleJustification.Right;
                     IsSuspendedWhileInactive = true;
-                    SelectedSymbol = "SPY"; 
                     Username = string.Empty;
                     Password = string.Empty;
-                    WebSocketUrl = "ws://kriyafx.de";
-					StrikeMoneyThreshold = 8; 
-					StrikeMoneyAlert = 5;
-					
-                    Print("KriyaFXOptionsMap: SetDefaults completed");
+                    WebSocketUrl = "ws://localhost:3000";
+                    Print("KriyaFXIndeStrikes: SetDefaults completed");
                 }
                 else if (State == State.Configure)
                 {
@@ -132,11 +129,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                     jsonSerializer = new JavaScriptSerializer();
                     webSocket = new ClientWebSocket();
                     cts = new CancellationTokenSource();
-                    Print("KriyaFXOptionsMap: Configure completed");
+                    Print("KriyaFXIndeStrikes: Configure completed");
                 }
                 else if (State == State.DataLoaded)
                 {
-                    Print("KriyaFXOptionsMap: DataLoaded - Initiating login");
+                    Print("KriyaFXIndeStrikes: DataLoaded - Initiating login");
                     // Only initiate login here, not WebSocket connection
                     Task.Run(async () =>
                     {
@@ -149,15 +146,15 @@ namespace NinjaTrader.NinjaScript.Indicators
                             Print("Error in Login: " + ex.Message);
                         }
                     }).Wait();
-                    Print("KriyaFXOptionsMap: DataLoaded - Login initiated");
+                    Print("KriyaFXIndeStrikes: DataLoaded - Login initiated");
                 }
                 else if (State == State.Historical)
                 {
-                    Print("KriyaFXOptionsMap: Historical state reached");
+                    Print("KriyaFXIndeStrikes: Historical state reached");
                 }
                 else if (State == State.Realtime)
                 {
-                    Print("KriyaFXOptionsMap: Realtime state reached - Initiating WebSocket connection");
+                    Print("KriyaFXIndeStrikes: Realtime state reached - Initiating WebSocket connection");
                     // Initiate WebSocket connection here
                     Task.Run(async () =>
                     {
@@ -179,7 +176,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     }
                     DisposeSharpDXResources();
                     DisconnectWebSocket();
-                    Print("KriyaFXOptionsMap: Terminated - Resources disposed");
+                    Print("KriyaFXIndeStrikes: Terminated - Resources disposed");
                 }
             }
             catch (Exception ex)
@@ -290,7 +287,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                 return GetCurrentAsk();
             }
         }
-
         private void UpdateRatio()
         {
             if (futurePrice > 0 && indexPrice > 0)
@@ -317,35 +313,19 @@ namespace NinjaTrader.NinjaScript.Indicators
                     isDataFetched = false;
                     return;
                 }
+
                 var options = data["Options"] as Dictionary<string, object>;
-                if (options == null)
+                if (options == null || !options.ContainsKey("Data"))
                 {
                     Print("Options or Data not found in the response.");
                     isDataFetched = false;
                     return;
                 }
 
-                // Use the SelectedSymbol string to select the appropriate data
-                string symbolKey = SelectedSymbol;
-                if (!options.ContainsKey(symbolKey))
-                {
-                    Print("Data for "+symbolKey+" not found in the response.");
-                    isDataFetched = false;
-                    return;
-                }
-
-                var symbolData = options[symbolKey] as Dictionary<string, object>;
-                if (symbolData == null || !symbolData.ContainsKey("Data"))
-                {
-                    Print(symbolKey +" data structure is invalid.");
-                    isDataFetched = false;
-                    return;
-                }
-
                 long currentUpdateTimestamp = 0;
-                if (symbolData.ContainsKey("Updated"))
+                if (options.ContainsKey("Updated"))
                 {
-                    currentUpdateTimestamp = Convert.ToInt64(symbolData["Updated"]);
+                    currentUpdateTimestamp = Convert.ToInt64(options["Updated"]);
                 }
 
                 // Only process the data if the timestamp has changed
@@ -354,9 +334,9 @@ namespace NinjaTrader.NinjaScript.Indicators
                     lastUpdateTimestamp = currentUpdateTimestamp;
                     Print("New update timestamp: " + lastUpdateTimestamp);
 
-                    if (symbolData.ContainsKey("Symbol"))
+                    if (options.ContainsKey("Symbol"))
                     {
-                        underlyingSymbol = symbolData["Symbol"].ToString();
+                        underlyingSymbol = options["Symbol"].ToString();
                     }
 
                     // Calculate future price and ratio only if not already calculated
@@ -365,7 +345,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                         futurePrice = GetFuturePriceAtTimestamp(lastUpdateTimestamp);
                         var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
 
-                        indexPrice = Convert.ToDouble(symbolData["Price"]);
+                        indexPrice = Convert.ToDouble(data["Price"]);
                         UpdateRatio(); // Update the ratio history
                         fixedRatio = currentRatio; // Use the moving average ratio
                         isRatioCalculated = true;
@@ -377,7 +357,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     else
                     {
                         // Update index price and recalculate ratio
-                        indexPrice = Convert.ToDouble(symbolData["Price"]);
+                        indexPrice = Convert.ToDouble(data["Price"]);
                         futurePrice = GetCurrentAsk(); // Get the current future price
                         UpdateRatio();
                         
@@ -387,11 +367,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                     double roundedIndexStrike = Math.Floor(indexPrice);
 
-                    if (symbolData.ContainsKey("ExpectedMove"))
+                    if (data.ContainsKey("ExpectedMove"))
                     {
-                        expectedMove = Convert.ToDouble(symbolData["ExpectedMove"]);
+                        expectedMove = Convert.ToDouble(data["ExpectedMove"]);
 
-                        indexPrice = Convert.ToDouble(symbolData["Price"]);
+                        indexPrice = Convert.ToDouble(data["Price"]);
 
                         if (!isExpectedMoveLevelsCalculated)
                         {
@@ -403,7 +383,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                         }
                     }
 
-                    var dataJson = jsonSerializer.Serialize(symbolData["Data"]);
+                    var dataJson = jsonSerializer.Serialize(options["Data"]);
                     var optionsData = jsonSerializer.Deserialize<List<Dictionary<string, object>>>(dataJson);
 
                     strikeLevels.Clear();
@@ -442,14 +422,14 @@ namespace NinjaTrader.NinjaScript.Indicators
                         }
                     }
 
-                    if (symbolData.ContainsKey("Total_ASK_Volume"))
+                    if (options.ContainsKey("Total_ASK_Volume"))
                     {
-                        totalAskVolume = Convert.ToDouble(symbolData["Total_ASK_Volume"]);
+                        totalAskVolume = Convert.ToDouble(options["Total_ASK_Volume"]);
                     }
 
                     if (options.ContainsKey("Total_GEX_Volume"))
                     {
-                        totalGexVolume = Convert.ToDouble(symbolData["Total_GEX_Volume"]);
+                        totalGexVolume = Convert.ToDouble(options["Total_GEX_Volume"]);
                     }
 
                     isDataFetched = true;
@@ -549,43 +529,29 @@ namespace NinjaTrader.NinjaScript.Indicators
             Print("OnRender completed");
         }
 
-        private SharpDX.Color GetColorForNetAskVolume(double netAskVolume, double callAskVolume, double putAskVolume)
+        private SharpDX.Color GetColorForNetAskVolume(double netAskVolume)
         {
-            double maxVolume = 3000000; // Adjust this value based on your typical volume range
+            // Define the range for color interpolation
+            double maxVolume = 30000; // Adjust this value based on your typical volume range
+
+            // Normalize the netAskVolume to a value between -1 and 1
+            double normalizedVolume = Math.Max(-1, Math.Min(1, netAskVolume / maxVolume));
+
             byte alpha = 64; // 50% opacity
-            double strikeMoneyThresholdMillions = StrikeMoneyThreshold * 10000;
-            double strikeMoneyAlertMillions = StrikeMoneyAlert * 10000;
 
-            // Check if the dominant value is over the user-defined threshold
-            double dominantValue = Math.Max(Math.Abs(callAskVolume), Math.Abs(putAskVolume));
-            
-            // Use logarithmic scale for better differentiation at higher values
-            double logNormalizedVolume = Math.Log10(1 + (9 * Math.Min(1, dominantValue / maxVolume)));
-
-            if (dominantValue > strikeMoneyThresholdMillions)
+            if (Math.Abs(normalizedVolume) < 0.1) // Close to zero, use a more vibrant blue
             {
-                // Apply gradient based on the normalized net ask volume
-                byte intensity = (byte)(64 + 191 * logNormalizedVolume); // Range from 64 to 255
-                if (netAskVolume < 0) // Negative, use red gradient
-                {
-                    return new SharpDX.Color(intensity, (byte)0, (byte)0, alpha);
-                }
-                else // Positive, use green gradient
-                {
-                    return new SharpDX.Color((byte)0, intensity, (byte)0, alpha);
-                }
+                return new SharpDX.Color((byte)65, (byte)105, (byte)225, alpha); // Royal Blue
             }
-            else if (dominantValue > strikeMoneyAlertMillions && dominantValue < strikeMoneyThresholdMillions)
+            else if (normalizedVolume < 0) // Negative, use red gradient
             {
-                // Use yellow for values between strikeMoneyAlert and strikeMoneyThreshold
-                byte intensity = (byte)(128 + 127 * logNormalizedVolume); // Range from 128 to 255
-                return new SharpDX.Color(intensity, intensity, (byte)0, alpha); // Yellow gradient
+                byte intensity = (byte)(255 * -normalizedVolume);
+                return new SharpDX.Color(intensity, (byte)0, (byte)0, alpha);
             }
-            else
+            else // Positive, use green gradient
             {
-                // Use blue for all other cases
-                byte intensity = (byte)(128 + 127 * logNormalizedVolume); // Range from 65 to 255
-                return new SharpDX.Color((byte)65, (byte)105, intensity, alpha); // Royal Blue gradient
+                byte intensity = (byte)(255 * normalizedVolume);
+                return new SharpDX.Color((byte)0, intensity, (byte)0, alpha);
             }
         }
 
@@ -617,7 +583,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     double callAskVolume = callAskVolumes[i];
                     double putAskVolume = putAskVolumes[i];
 
-                    SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume, callAskVolume, putAskVolume);
+                    SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume);
 
                     // Draw the line
                     using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, new SharpDX.Color((byte)65, (byte)105, (byte)225, (byte)64))) // Royal Blue with 50% opacity
@@ -709,8 +675,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private string FormatVolume(double volume)
         {
-            string sign = volume < 0 ? "-" : "";
-            return sign + "$" + String.Format("{0:N0}", Math.Abs(volume)).Replace(",", ".");
+            // Convert the volume to hundreds
+            double volumeInHundreds = volume * 100;
+            string sign = volumeInHundreds < 0 ? "-" : "";
+            return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
         }
 
         private void DrawVolumeTable(ChartControl chartControl)
@@ -796,8 +764,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private string FormatVolumeForDisplay(double volume)
         {
-            string sign = volume < 0 ? "-" : "";
-            return sign + "$" + String.Format("{0:N0}", Math.Abs(volume)).Replace(",", ".");
+            // Convert the volume to hundreds
+            double volumeInHundreds = volume * 100;
+            string sign = volumeInHundreds < 0 ? "-" : "";
+            return sign + "$" + String.Format("{0:N0}", Math.Abs(volumeInHundreds)).Replace(",", ".");
         }
 
         private string FormatGexVolumeForDisplay(double gexVolume)
@@ -966,19 +936,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         [NinjaScriptProperty]
         [Display(Name = "WebSocket URL", Order = 3, GroupName = "Parameters")]
         public string WebSocketUrl { get; set; }
-
-        // Add properties for thresholds
-        [NinjaScriptProperty]
-        [Display(Name = "Dollar Threshold ($M)", Order = 4, GroupName = "Parameters")]
-        public double StrikeMoneyThreshold { get; set; } 
-
-        [NinjaScriptProperty]
-        [Display(Name = "Net Difference Threshold ($M)", Order = 5, GroupName = "Parameters")]
-        public double StrikeMoneyAlert { get; set; } 
-
-        [NinjaScriptProperty]
-        [Display(Name = "Options Symbol", Description = "Select SPX or SPY options data", Order = 1, GroupName = "Parameters")]
-        public string SelectedSymbol { get; set; }
         #endregion
 
     }
@@ -990,19 +947,19 @@ namespace NinjaTrader.NinjaScript.Indicators
 {
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
-		private KriyaFXOptionsMap[] cacheKriyaFXOptionsMap;
-		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		private KriyaFXIndeStrikes[] cacheKriyaFXIndeStrikes;
+		public KriyaFXIndeStrikes KriyaFXIndeStrikes(string username, string password, string webSocketUrl)
 		{
-			return KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return KriyaFXIndeStrikes(Input, username, password, webSocketUrl);
 		}
 
-		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public KriyaFXIndeStrikes KriyaFXIndeStrikes(ISeries<double> input, string username, string password, string webSocketUrl)
 		{
-			if (cacheKriyaFXOptionsMap != null)
-				for (int idx = 0; idx < cacheKriyaFXOptionsMap.Length; idx++)
-					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXOptionsMap[idx].StrikeMoneyThreshold == strikeMoneyThreshold && cacheKriyaFXOptionsMap[idx].StrikeMoneyAlert == strikeMoneyAlert && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
-						return cacheKriyaFXOptionsMap[idx];
-			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password, WebSocketUrl = webSocketUrl, StrikeMoneyThreshold = strikeMoneyThreshold, StrikeMoneyAlert = strikeMoneyAlert }, input, ref cacheKriyaFXOptionsMap);
+			if (cacheKriyaFXIndeStrikes != null)
+				for (int idx = 0; idx < cacheKriyaFXIndeStrikes.Length; idx++)
+					if (cacheKriyaFXIndeStrikes[idx] != null && cacheKriyaFXIndeStrikes[idx].Username == username && cacheKriyaFXIndeStrikes[idx].Password == password && cacheKriyaFXIndeStrikes[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXIndeStrikes[idx].EqualsInput(input))
+						return cacheKriyaFXIndeStrikes[idx];
+			return CacheIndicator<KriyaFXIndeStrikes>(new KriyaFXIndeStrikes(){ Username = username, Password = password, WebSocketUrl = webSocketUrl }, input, ref cacheKriyaFXIndeStrikes);
 		}
 	}
 }
@@ -1011,14 +968,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXIndeStrikes KriyaFXIndeStrikes(string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXIndeStrikes(Input, username, password, webSocketUrl);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXIndeStrikes KriyaFXIndeStrikes(ISeries<double> input , string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXIndeStrikes(input, username, password, webSocketUrl);
 		}
 	}
 }
@@ -1027,17 +984,16 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXIndeStrikes KriyaFXIndeStrikes(string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXIndeStrikes(Input, username, password, webSocketUrl);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXIndeStrikes KriyaFXIndeStrikes(ISeries<double> input , string username, string password, string webSocketUrl)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXIndeStrikes(input, username, password, webSocketUrl);
 		}
 	}
 }
 
 #endregion
-
