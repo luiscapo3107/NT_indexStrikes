@@ -86,6 +86,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double fixedExpectedMaxPrice;
         private double fixedExpectedMinPrice;
 
+        // Add these to your class-level private variables
+        private List<double> callProbabilityOfTouch = new List<double>();
+        private List<double> putProbabilityOfTouch = new List<double>();
+
         // Class to store net ask volume data per strike
         private class NetAskVolumeData
         {
@@ -123,6 +127,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     WebSocketUrl = "ws://kriyafx.de";
 					StrikeMoneyThreshold = 8; 
 					StrikeMoneyAlert = 5;
+                    ShowProbabilityOfTouch = true;
 					
                     Print("KriyaFXOptionsMap: SetDefaults completed");
                 }
@@ -411,6 +416,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                     netAskVolumes.Clear();
                     callAskVolumes.Clear();
                     putAskVolumes.Clear();
+                    callProbabilityOfTouch.Clear();
+                    putProbabilityOfTouch.Clear();
 
                     foreach (var item in optionsData)
                     {
@@ -426,6 +433,10 @@ namespace NinjaTrader.NinjaScript.Indicators
                             double callAskVolume = call.ContainsKey("ASK_Volume") ? Convert.ToDouble(call["ASK_Volume"]) : 0;
                             double putAskVolume = put.ContainsKey("ASK_Volume") ? Convert.ToDouble(put["ASK_Volume"]) : 0;
 
+                            // Add probability of touch processing
+                            double callPoT = call.ContainsKey("ProbabilityOfTouch") ? Convert.ToDouble(call["ProbabilityOfTouch"]) : 0;
+                            double putPoT = put.ContainsKey("ProbabilityOfTouch") ? Convert.ToDouble(put["ProbabilityOfTouch"]) : 0;
+
                             // Update the dictionaries with current values
                             previousNetAskVolumeData[futureStrike] = new NetAskVolumeData
                             {
@@ -433,12 +444,14 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 NetAskVolumeTimestamp = lastUpdateTimestamp
                             };
 
-                            // Add all values to lists, using default values if necessary
+                            // Add all values to lists
                             indexStrikes.Add(indexStrike);
                             strikeLevels.Add(futureStrike);
                             netAskVolumes.Add(netAskVolume);
                             callAskVolumes.Add(callAskVolume);
                             putAskVolumes.Add(putAskVolume);
+                            callProbabilityOfTouch.Add(callPoT);
+                            putProbabilityOfTouch.Add(putPoT);
                         }
                     }
 
@@ -600,8 +613,9 @@ namespace NinjaTrader.NinjaScript.Indicators
             }
 
             int minCount = Math.Min(strikeLevels.Count, indexStrikes.Count);
-			minCount = Math.Min(minCount, netAskVolumes.Count);
+            minCount = Math.Min(minCount, netAskVolumes.Count);
             minCount = Math.Min(minCount, Math.Min(callAskVolumes.Count, putAskVolumes.Count));
+            minCount = Math.Min(minCount, Math.Min(callProbabilityOfTouch.Count, putProbabilityOfTouch.Count));
 
             float xStart = ChartPanel.X;
             float xEnd = ChartPanel.X + ChartPanel.W;
@@ -616,6 +630,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                     float y = chartScale.GetYByValue(strikeLevel);
                     double callAskVolume = callAskVolumes[i];
                     double putAskVolume = putAskVolumes[i];
+                    double callPoT = callProbabilityOfTouch[i];
+                    double putPoT = putProbabilityOfTouch[i];
 
                     SharpDX.Color rectangleColor = GetColorForNetAskVolume(netAskVolume, callAskVolume, putAskVolume);
 
@@ -640,8 +656,10 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                     // Prepare text for display
                     string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
-                    string callVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume);
-                    string putVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume);
+                    string callVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume) + 
+                        (ShowProbabilityOfTouch ? ", PoT: " + Math.Round(callPoT, 1) + "%" : "");
+                    string putVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume) + 
+                        (ShowProbabilityOfTouch ? ", PoT: " + Math.Round(putPoT, 1) + "%" : "");
                     string netAskVolumeText = "Net $$ Vol: " + FormatVolume(netAskVolume);
 
                     using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
@@ -979,6 +997,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         [NinjaScriptProperty]
         [Display(Name = "Options Symbol", Description = "Select SPX or SPY options data", Order = 1, GroupName = "Parameters")]
         public string SelectedSymbol { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Probability of Touch", Description = "Display PoT values next to volumes", Order = 6, GroupName = "Parameters")]
+        public bool ShowProbabilityOfTouch { get; set; }
         #endregion
 
     }
