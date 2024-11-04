@@ -104,6 +104,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double previousTotalAskVolume = 0;
         private long previousTotalAskVolumeTimestamp = 0;
 
+        private double maxGexLevel = 0;
+        private double minGexLevel = 0;
+        private bool isGexLevelsCalculated = false;
+
         protected override void OnStateChange()
         {
             try
@@ -128,6 +132,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 					StrikeMoneyThreshold = 8; 
 					StrikeMoneyAlert = 5;
                     ShowProbabilityOfTouch = true;
+                    ShowMaxGexLevels = true;
+                    ShowExpectedMoveLevels = true;
 					
                     Print("KriyaFXOptionsMap: SetDefaults completed");
                 }
@@ -419,10 +425,16 @@ namespace NinjaTrader.NinjaScript.Indicators
                     callProbabilityOfTouch.Clear();
                     putProbabilityOfTouch.Clear();
 
+                    // Calculate GEX levels
+                    double maxGex = double.MinValue;
+                    double minGex = double.MaxValue;
+                    double maxGexStrike = 0;
+                    double minGexStrike = 0;
+
                     foreach (var item in optionsData)
                     {
                         if (item.ContainsKey("strike") && item.ContainsKey("Net_ASK_Volume") &&
-                            item.ContainsKey("call") && item.ContainsKey("put"))
+                            item.ContainsKey("call") && item.ContainsKey("put") && item.ContainsKey("Net_GEX_Volume"))
                         {
                             double indexStrike = Convert.ToDouble(item["strike"]);
                             double futureStrike = indexStrike * fixedRatio;
@@ -444,6 +456,20 @@ namespace NinjaTrader.NinjaScript.Indicators
                                 NetAskVolumeTimestamp = lastUpdateTimestamp
                             };
 
+                            double strike = Convert.ToDouble(item["strike"]);
+                            double netGexVolume = Convert.ToDouble(item["Net_GEX_Volume"]);
+
+                            if (netGexVolume > maxGex)
+                            {
+                                maxGex = netGexVolume;
+                                maxGexStrike = strike;
+                            }
+                            if (netGexVolume < minGex)
+                            {
+                                minGex = netGexVolume;
+                                minGexStrike = strike;
+                            }
+
                             // Add all values to lists
                             indexStrikes.Add(indexStrike);
                             strikeLevels.Add(futureStrike);
@@ -454,6 +480,11 @@ namespace NinjaTrader.NinjaScript.Indicators
                             putProbabilityOfTouch.Add(putPoT);
                         }
                     }
+
+                    // After loop completes, set the levels
+                    maxGexLevel = maxGexStrike * fixedRatio;  // Apply the ratio like other price levels
+                    minGexLevel = minGexStrike * fixedRatio;
+                    isGexLevelsCalculated = true;
 
                     if (symbolData.ContainsKey("Total_ASK_Volume"))
                     {
@@ -549,14 +580,17 @@ namespace NinjaTrader.NinjaScript.Indicators
             // Draw Expected Move levels
             Print("Calling ExpectedMoveLevels");
 
-            if (isExpectedMoveLevelsCalculated)
+            if (isExpectedMoveLevelsCalculated && ShowExpectedMoveLevels)
             {
                 DrawExpectedMoveLevel(chartControl, chartScale, fixedExpectedMaxPrice, "Expected Max Price");
                 DrawExpectedMoveLevel(chartControl, chartScale, fixedExpectedMinPrice, "Expected Min Price");
             }
-            else
+
+            // Draw GEX levels if enabled
+            if (isGexLevelsCalculated && ShowMaxGexLevels)
             {
-                Print("Expected move levels not yet calculated");
+                DrawGexLevel(chartControl, chartScale, maxGexLevel, true);
+                DrawGexLevel(chartControl, chartScale, minGexLevel, false);
             }
 
             Print("OnRender completed");
@@ -704,7 +738,6 @@ namespace NinjaTrader.NinjaScript.Indicators
             Print("DrawExpectedMoveLevel started for " + label + " Price: " + price);
 
             float y = chartScale.GetYByValue(price);
-
             float xStart = ChartPanel.X;
             float xEnd = ChartPanel.X + ChartPanel.W;
 
@@ -720,6 +753,14 @@ namespace NinjaTrader.NinjaScript.Indicators
                 float yTop = chartScale.GetYByValue(price + 0.25);
                 float yBottom = chartScale.GetYByValue(price - 0.25);
                 RenderTarget.FillRectangle(new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop), rectangleBrush);
+            }
+
+            // Draw label - matching GEX level text positioning
+            using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
+            using (var textFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12))
+            {
+                RenderTarget.DrawText(label, textFormat, 
+                    new SharpDX.RectangleF(xStart + 5, y - 15, 100, 20), textBrush);
             }
 
             Print("DrawExpectedMoveLevel completed for " + label);
@@ -972,6 +1013,44 @@ namespace NinjaTrader.NinjaScript.Indicators
             cts.Dispose();
         }
 
+        private void DrawGexLevel(ChartControl chartControl, ChartScale chartScale, double price, bool isMax)
+        {
+            Print("DrawGexLevel started for " + (isMax ? "Max" : "Min") + " GEX Level at " + price);
+
+            float y = chartScale.GetYByValue(price);
+            float xStart = ChartPanel.X;
+            float xEnd = ChartPanel.X + ChartPanel.W;
+
+            // Use green for max GEX, red for min GEX
+            SharpDX.Color lineColor = isMax ? 
+                new SharpDX.Color((byte)0, (byte)255, (byte)0, (byte)64) :  // Green with 25% opacity
+                new SharpDX.Color((byte)255, (byte)0, (byte)0, (byte)64);   // Red with 25% opacity
+
+            // Draw the line
+            using (var lineBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, lineColor))
+            {
+                RenderTarget.DrawLine(new SharpDX.Vector2(xStart, y), new SharpDX.Vector2(xEnd, y), lineBrush, 2);
+            }
+
+            // Draw the rectangle
+            using (var rectangleBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, 
+                new SharpDX.Color(lineColor.R, lineColor.G, lineColor.B, (byte)32))) // 12.5% opacity
+            {
+                float yTop = chartScale.GetYByValue(price + 0.25);
+                float yBottom = chartScale.GetYByValue(price - 0.25);
+                RenderTarget.FillRectangle(new SharpDX.RectangleF(xStart, yTop, xEnd - xStart, yBottom - yTop), rectangleBrush);
+            }
+
+            // Draw label
+            string label = isMax ? "Max GEX" : "Min GEX";
+            using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
+            using (var textFormat = new SharpDX.DirectWrite.TextFormat(Core.Globals.DirectWriteFactory, "Arial", 12))
+            {
+                RenderTarget.DrawText(label, textFormat, 
+                    new SharpDX.RectangleF(xStart + 5, y - 15, 100, 20), textBrush);
+            }
+        }
+
         #region Properties
         [NinjaScriptProperty]
         [Display(Name = "Username", Order = 1, GroupName = "Parameters")]
@@ -1001,6 +1080,14 @@ namespace NinjaTrader.NinjaScript.Indicators
         [NinjaScriptProperty]
         [Display(Name = "Show Probability of Touch", Description = "Display PoT values next to volumes", Order = 6, GroupName = "Parameters")]
         public bool ShowProbabilityOfTouch { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show GEX Levels", Description = "Display maximum Gamma Exposure levels", Order = 7, GroupName = "Parameters")]
+        public bool ShowMaxGexLevels { get; set; }
+
+        [NinjaScriptProperty]
+        [Display(Name = "Show Expected Move Levels", Description = "Display Expected Move price levels", Order = 8, GroupName = "Parameters")]
+        public bool ShowExpectedMoveLevels { get; set; }
         #endregion
 
     }
