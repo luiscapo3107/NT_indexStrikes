@@ -40,7 +40,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         private JavaScriptSerializer jsonSerializer;
         private List<double> strikeLevels = new List<double>();
         private List<double> indexStrikes = new List<double>();
-        private double currentPrice;
 
         // SharpDX Resources
         private SharpDX.DirectWrite.TextFormat textFormat;
@@ -67,8 +66,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         private SharpDX.Direct2D1.Brush tableBackgroundBrush;
 
         private double expectedMove;
-        private double expectedMaxPrice;
-        private double expectedMinPrice;
         private bool isLoggedIn = false;
         private bool isDataFetched = false;
         private long lastUpdateTimestamp;
@@ -76,12 +73,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private ClientWebSocket webSocket;
         private CancellationTokenSource cts;
-        private string authToken;
-
         private List<string> messageChunks = new List<string>();
-
-        private bool isRatioCalculated = false;
-        private double fixedRatio;
         private bool isExpectedMoveLevelsCalculated = false;
         private double fixedExpectedMaxPrice;
         private double fixedExpectedMinPrice;
@@ -107,7 +99,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double maxGexLevel = 0;
         private double minGexLevel = 0;
         private bool isGexLevelsCalculated = false;
-
         protected override void OnStateChange()
         {
             try
@@ -134,6 +125,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                     ShowProbabilityOfTouch = true;
                     ShowMaxGexLevels = true;
                     ShowExpectedMoveLevels = true;
+                    Calculate = Calculate.OnEachTick;  // Change to calculate on each tick
 					
                     Print("KriyaFXOptionsMap: SetDefaults completed");
                 }
@@ -205,6 +197,14 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         protected override void OnBarUpdate() { }
 
+        protected override void OnMarketData(MarketDataEventArgs marketDataUpdate)
+        {
+            if (marketDataUpdate.MarketDataType == MarketDataType.Ask)
+            {
+                futurePrice = marketDataUpdate.Price;
+            }
+        }
+
         private async Task<bool> Login()
         {
             try
@@ -271,37 +271,6 @@ namespace NinjaTrader.NinjaScript.Indicators
                 }
             }
         }
-
-        private double GetFuturePriceAtTimestamp(long timestamp)
-        {//TODO: FIX PROBLEM WITH GETTING FUTURE PRICE AT TIMESTAMP DEPENDING ON BAR SIZE OF CHART (15' makes problems!) 
-            // Convert Unix timestamp to DateTime
-            var barTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(timestamp).ToLocalTime();
-
-            // Get the bar index for the specified time
-            int barIndex = BarsArray[0].GetBar(barTime);
-
-            if (barIndex >= 0)
-            {
-                // Return the ask price of the bar
-                return Bars.GetAsk(barIndex);
-            }
-            else
-            {
-                // If no exact match is found, manually search for the closest bar before the specified time
-                for (int i = BarsArray[0].Count - 1; i >= 0; i--)
-                {
-                    if (BarsArray[0].GetTime(i) <= barTime)
-                    {
-                        return Bars.GetAsk(i);
-                    }
-                }
-
-                // If still no match, return the current ask price as a fallback
-                Print("No historical data found for the specified timestamp. Using current ask price.");
-                return GetCurrentAsk();
-            }
-        }
-
         private void UpdateRatio()
         {
             if (futurePrice > 0 && indexPrice > 0)
@@ -370,31 +339,14 @@ namespace NinjaTrader.NinjaScript.Indicators
                         underlyingSymbol = symbolData["Symbol"].ToString();
                     }
 
-                    // Calculate future price and ratio only if not already calculated
-                    if (!isRatioCalculated)
-                    {
-                        futurePrice = GetFuturePriceAtTimestamp(lastUpdateTimestamp);
-                        var dateTime = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddSeconds(lastUpdateTimestamp).ToLocalTime();
+                    // Calculate future price and ratio
+                    indexPrice = Convert.ToDouble(symbolData["Price"]);
+                    UpdateRatio(); // Update the ratio history
 
-                        indexPrice = Convert.ToDouble(symbolData["Price"]);
-                        UpdateRatio(); // Update the ratio history
-                        fixedRatio = currentRatio; // Use the moving average ratio
-                        isRatioCalculated = true;
-
-                        Print("Initial Future Price (at timestamp): " + futurePrice);
-                        Print("Initial Index Price: " + indexPrice);
-                        Print("Fixed Index to Futures Ratio: " + fixedRatio);
-                    }
-                    else
-                    {
-                        // Update index price and recalculate ratio
-                        indexPrice = Convert.ToDouble(symbolData["Price"]);
-                        futurePrice = GetCurrentAsk(); // Get the current future price
-                        UpdateRatio();
-                        
-                        // Use the fixed ratio for calculations
-                        futurePrice = indexPrice * fixedRatio;
-                    }
+                    Print("Initial Future Price (at timestamp): " + futurePrice);
+                    Print("Initial Index Price: " + indexPrice);
+                    Print("Index to Futures Ratio: " + currentRatio);
+              
 
                     double roundedIndexStrike = Math.Floor(indexPrice);
 
@@ -406,8 +358,8 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                         if (!isExpectedMoveLevelsCalculated)
                         {
-                            fixedExpectedMaxPrice = (indexPrice + expectedMove) * fixedRatio;
-                            fixedExpectedMinPrice = (indexPrice - expectedMove) * fixedRatio;
+                            fixedExpectedMaxPrice = (indexPrice + expectedMove) * currentRatio;
+                            fixedExpectedMinPrice = (indexPrice - expectedMove) * currentRatio;
 
                             isExpectedMoveLevelsCalculated = true;
 
@@ -437,7 +389,7 @@ namespace NinjaTrader.NinjaScript.Indicators
                             item.ContainsKey("call") && item.ContainsKey("put") && item.ContainsKey("Net_GEX_Volume"))
                         {
                             double indexStrike = Convert.ToDouble(item["strike"]);
-                            double futureStrike = indexStrike * fixedRatio;
+                            double futureStrike = indexStrike * currentRatio;
                             double netAskVolume = Convert.ToDouble(item["Net_ASK_Volume"]);
                             var call = item["call"] as Dictionary<string, object>;
                             var put = item["put"] as Dictionary<string, object>;
@@ -482,8 +434,8 @@ namespace NinjaTrader.NinjaScript.Indicators
                     }
 
                     // After loop completes, set the levels
-                    maxGexLevel = maxGexStrike * fixedRatio;  // Apply the ratio like other price levels
-                    minGexLevel = minGexStrike * fixedRatio;
+                    maxGexLevel = maxGexStrike * currentRatio;  // Apply the ratio like other price levels
+                    minGexLevel = minGexStrike * currentRatio;
                     isGexLevelsCalculated = true;
 
                     if (symbolData.ContainsKey("Total_ASK_Volume"))
