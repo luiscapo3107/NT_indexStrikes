@@ -52,7 +52,6 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double futurePrice;
         private double indexPrice;
         private double currentRatio;
-        private Queue<double> ratioHistory = new Queue<double>(10); // Store last 10 ratios
 
         private List<double> netAskVolumes = new List<double>();
         private List<double> callAskVolumes = new List<double>();
@@ -99,6 +98,7 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double maxGexLevel = 0;
         private double minGexLevel = 0;
         private bool isGexLevelsCalculated = false;
+        private bool isRatioCalculated = false;
         protected override void OnStateChange()
         {
             try
@@ -277,7 +277,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             {
                 double newRatio = futurePrice / indexPrice;
                 ratioHistory.Enqueue(newRatio);
-                if (ratioHistory.Count > 10)
+                if (ratioHistory.Count > 100)
                     ratioHistory.Dequeue();
 
                 currentRatio = ratioHistory.Average(); // Simple moving average of the ratio
@@ -341,12 +341,11 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                     // Calculate future price and ratio
                     indexPrice = Convert.ToDouble(symbolData["Price"]);
-                    UpdateRatio(); // Update the ratio history
-
-                    Print("Initial Future Price (at timestamp): " + futurePrice);
-                    Print("Initial Index Price: " + indexPrice);
-                    Print("Index to Futures Ratio: " + currentRatio);
-              
+                    if (!isRatioCalculated && futurePrice > 0 && indexPrice > 0)
+                    {
+                        UpdateRatio();
+                        isRatioCalculated = true;
+                    }               
 
                     double roundedIndexStrike = Math.Floor(indexPrice);
 
@@ -642,38 +641,47 @@ namespace NinjaTrader.NinjaScript.Indicators
 
                     // Prepare text for display
                     string strikeText = "Strike: " + Math.Round(indexStrike).ToString() + " (" + Math.Round(strikeLevel).ToString() + ")";
-                    string callVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume) + 
-                        (ShowProbabilityOfTouch ? ", PoT: " + Math.Round(callPoT, 1) + "%" : "");
-                    string putVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume) + 
-                        (ShowProbabilityOfTouch ? ", PoT: " + Math.Round(putPoT, 1) + "%" : "");
+                    string callVolumeText = "Call $$ Vol: " + FormatVolume(callAskVolume);
+                    string putVolumeText = "Put $$ Vol: " + FormatVolume(putAskVolume);
                     string netAskVolumeText = "Net $$ Vol: " + FormatVolume(netAskVolume);
+                    string potText = ShowProbabilityOfTouch ? "PoT: " + Math.Round(callPoT, 1) + "%" : "";
 
                     using (var textBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, SharpDX.Color.White))
                     using (var strikeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, strikeText, textFormat, float.MaxValue, float.MaxValue))
                     using (var callVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, callVolumeText, textFormat, float.MaxValue, float.MaxValue))
                     using (var putVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, putVolumeText, textFormat, float.MaxValue, float.MaxValue))
                     using (var netAskVolumeTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, netAskVolumeText, textFormat, float.MaxValue, float.MaxValue))
+                    using (var potTextLayout = new SharpDX.DirectWrite.TextLayout(Core.Globals.DirectWriteFactory, potText, textFormat, float.MaxValue, float.MaxValue))
                     {
                         float strikeTextWidth = strikeTextLayout.Metrics.Width;
                         float strikeTextHeight = strikeTextLayout.Metrics.Height;
                         float callVolumeTextHeight = callVolumeTextLayout.Metrics.Height;
                         float putVolumeTextHeight = putVolumeTextLayout.Metrics.Height;
                         float netAskVolumeTextHeight = netAskVolumeTextLayout.Metrics.Height;
+                        float potTextHeight = potTextLayout.Metrics.Height;
 
-                        float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(strikeTextWidth, 
+                        float x = (float)ChartPanel.X + (float)ChartPanel.W - Math.Max(
+                            Math.Max(strikeTextWidth, 
                             Math.Max(callVolumeTextLayout.Metrics.Width, 
-                            Math.Max(putVolumeTextLayout.Metrics.Width, 
-                            netAskVolumeTextLayout.Metrics.Width))) - 5;
+                            Math.Max(putVolumeTextLayout.Metrics.Width,
+                            Math.Max(netAskVolumeTextLayout.Metrics.Width,
+                            potTextLayout.Metrics.Width)))), 5);
                         
                         // Position text elements
-                        float yStrikeText = y - 30 ;
-                        float yNetAskVolumeText = yStrikeText + strikeTextHeight; 
+                        float yStrikeText = y - 30;
+                        float yNetAskVolumeText = yStrikeText + strikeTextHeight;
                         float yCallVolumeText = yNetAskVolumeText + netAskVolumeTextHeight;
                         float yPutVolumeText = yCallVolumeText + callVolumeTextHeight;
+                        float yPotText = yPutVolumeText + putVolumeTextHeight;
+
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yStrikeText), strikeTextLayout, textBrush);
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yNetAskVolumeText), netAskVolumeTextLayout, textBrush);
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yCallVolumeText), callVolumeTextLayout, textBrush);
                         RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yPutVolumeText), putVolumeTextLayout, textBrush);
+                        if (ShowProbabilityOfTouch)
+                        {
+                            RenderTarget.DrawTextLayout(new SharpDX.Vector2(x, yPotText), potTextLayout, textBrush);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -687,8 +695,7 @@ namespace NinjaTrader.NinjaScript.Indicators
 
         private void DrawExpectedMoveLevel(ChartControl chartControl, ChartScale chartScale, double price, string label)
         {
-            Print("DrawExpectedMoveLevel started for " + label + " Price: " + price);
-
+            Print("Method DrawExpectedMoveLevel has been called");
             float y = chartScale.GetYByValue(price);
             float xStart = ChartPanel.X;
             float xEnd = ChartPanel.X + ChartPanel.W;
@@ -729,7 +736,7 @@ namespace NinjaTrader.NinjaScript.Indicators
             Print("DrawVolumeTable started");
 
             float tableWidth = 300;
-            float tableHeight = 130; // Increased height to accommodate the new row
+            float tableHeight = 150; // Increased height to accommodate the ratio row
             float padding = 10;
             float labelWidth = 120;
             float titleHeight = 30;
@@ -771,11 +778,9 @@ namespace NinjaTrader.NinjaScript.Indicators
             else
             {
                 // Draw normal volume table content
-                // Center the title
                 tableTitleFormat.TextAlignment = SharpDX.DirectWrite.TextAlignment.Center;
                 RenderTarget.DrawText("Summary", tableTitleFormat, new SharpDX.RectangleF(x, y, tableWidth, titleHeight), textBrush);
 
-                // Draw table content
                 float contentY = y + titleHeight;
                 float valueX = x + labelWidth;
 
@@ -783,23 +788,26 @@ namespace NinjaTrader.NinjaScript.Indicators
                 RenderTarget.DrawText("Underlying:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY, labelWidth, rowHeight), textBrush);
                 RenderTarget.DrawText(underlyingSymbol, tableContentFormat, new SharpDX.RectangleF(valueX, contentY, tableWidth - labelWidth - 5, rowHeight), textBrush);
 
+                // Future/Index Ratio
+                RenderTarget.DrawText("Ratio:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText(currentRatio.ToString("F4"), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
                 // Last Update Time
-                RenderTarget.DrawText("Last Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 1 * rowHeight, labelWidth, rowHeight), textBrush);
-                RenderTarget.DrawText(FormatTimestamp(lastUpdateTimestamp), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 1 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+                RenderTarget.DrawText("Last Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText(FormatTimestamp(lastUpdateTimestamp), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 2 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
 
                 // Total Ask Volume
-                RenderTarget.DrawText("Total Net $$ Vol:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 2 * rowHeight, labelWidth, rowHeight), textBrush);
-                RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 2 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+                RenderTarget.DrawText("Total Net $$ Vol:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
 
                 // Time Since Last Update
-                RenderTarget.DrawText("Time Since Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
+                RenderTarget.DrawText("Time Since Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 4 * rowHeight, labelWidth, rowHeight), textBrush);
                 
-                // Calculate time since last update
                 long currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
                 long secondsSinceUpdate = currentTimestamp - lastUpdateTimestamp;
                 string timeSinceUpdateStr = secondsSinceUpdate + " seconds";
                 
-                RenderTarget.DrawText(timeSinceUpdateStr, tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+                RenderTarget.DrawText(timeSinceUpdateStr, tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 4 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
             }
 
             Print("DrawVolumeTable completed");
@@ -1042,6 +1050,12 @@ namespace NinjaTrader.NinjaScript.Indicators
         public bool ShowExpectedMoveLevels { get; set; }
         #endregion
 
+        // Add this property override near the top of your class
+        public override string DisplayName
+        {
+            get { return "KriyaFXOptionsMap (" + SelectedSymbol + ")"; }
+        }
+
     }
 }
 
@@ -1052,18 +1066,18 @@ namespace NinjaTrader.NinjaScript.Indicators
 	public partial class Indicator : NinjaTrader.Gui.NinjaScript.IndicatorRenderBase
 	{
 		private KriyaFXOptionsMap[] cacheKriyaFXOptionsMap;
-		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert, string selectedSymbol, bool showProbabilityOfTouch, bool showMaxGexLevels, bool showExpectedMoveLevels)
 		{
-			return KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert, selectedSymbol, showProbabilityOfTouch, showMaxGexLevels, showExpectedMoveLevels);
 		}
 
-		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input, string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert, string selectedSymbol, bool showProbabilityOfTouch, bool showMaxGexLevels, bool showExpectedMoveLevels)
 		{
 			if (cacheKriyaFXOptionsMap != null)
 				for (int idx = 0; idx < cacheKriyaFXOptionsMap.Length; idx++)
-					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXOptionsMap[idx].StrikeMoneyThreshold == strikeMoneyThreshold && cacheKriyaFXOptionsMap[idx].StrikeMoneyAlert == strikeMoneyAlert && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
+					if (cacheKriyaFXOptionsMap[idx] != null && cacheKriyaFXOptionsMap[idx].Username == username && cacheKriyaFXOptionsMap[idx].Password == password && cacheKriyaFXOptionsMap[idx].WebSocketUrl == webSocketUrl && cacheKriyaFXOptionsMap[idx].StrikeMoneyThreshold == strikeMoneyThreshold && cacheKriyaFXOptionsMap[idx].StrikeMoneyAlert == strikeMoneyAlert && cacheKriyaFXOptionsMap[idx].SelectedSymbol == selectedSymbol && cacheKriyaFXOptionsMap[idx].ShowProbabilityOfTouch == showProbabilityOfTouch && cacheKriyaFXOptionsMap[idx].ShowMaxGexLevels == showMaxGexLevels && cacheKriyaFXOptionsMap[idx].ShowExpectedMoveLevels == showExpectedMoveLevels && cacheKriyaFXOptionsMap[idx].EqualsInput(input))
 						return cacheKriyaFXOptionsMap[idx];
-			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password, WebSocketUrl = webSocketUrl, StrikeMoneyThreshold = strikeMoneyThreshold, StrikeMoneyAlert = strikeMoneyAlert }, input, ref cacheKriyaFXOptionsMap);
+			return CacheIndicator<KriyaFXOptionsMap>(new KriyaFXOptionsMap(){ Username = username, Password = password, WebSocketUrl = webSocketUrl, StrikeMoneyThreshold = strikeMoneyThreshold, StrikeMoneyAlert = strikeMoneyAlert, SelectedSymbol = selectedSymbol, ShowProbabilityOfTouch = showProbabilityOfTouch, ShowMaxGexLevels = showMaxGexLevels, ShowExpectedMoveLevels = showExpectedMoveLevels }, input, ref cacheKriyaFXOptionsMap);
 		}
 	}
 }
@@ -1072,14 +1086,14 @@ namespace NinjaTrader.NinjaScript.MarketAnalyzerColumns
 {
 	public partial class MarketAnalyzerColumn : MarketAnalyzerColumnBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert, string selectedSymbol, bool showProbabilityOfTouch, bool showMaxGexLevels, bool showExpectedMoveLevels)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert, selectedSymbol, showProbabilityOfTouch, showMaxGexLevels, showExpectedMoveLevels);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert, string selectedSymbol, bool showProbabilityOfTouch, bool showMaxGexLevels, bool showExpectedMoveLevels)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert, selectedSymbol, showProbabilityOfTouch, showMaxGexLevels, showExpectedMoveLevels);
 		}
 	}
 }
@@ -1088,17 +1102,16 @@ namespace NinjaTrader.NinjaScript.Strategies
 {
 	public partial class Strategy : NinjaTrader.Gui.NinjaScript.StrategyRenderBase
 	{
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert, string selectedSymbol, bool showProbabilityOfTouch, bool showMaxGexLevels, bool showExpectedMoveLevels)
 		{
-			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXOptionsMap(Input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert, selectedSymbol, showProbabilityOfTouch, showMaxGexLevels, showExpectedMoveLevels);
 		}
 
-		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert)
+		public Indicators.KriyaFXOptionsMap KriyaFXOptionsMap(ISeries<double> input , string username, string password, string webSocketUrl, double strikeMoneyThreshold, double strikeMoneyAlert, string selectedSymbol, bool showProbabilityOfTouch, bool showMaxGexLevels, bool showExpectedMoveLevels)
 		{
-			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert);
+			return indicator.KriyaFXOptionsMap(input, username, password, webSocketUrl, strikeMoneyThreshold, strikeMoneyAlert, selectedSymbol, showProbabilityOfTouch, showMaxGexLevels, showExpectedMoveLevels);
 		}
 	}
 }
 
 #endregion
-
