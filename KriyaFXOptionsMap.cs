@@ -99,6 +99,10 @@ namespace NinjaTrader.NinjaScript.Indicators
         private double minGexLevel = 0;
         private bool isGexLevelsCalculated = false;
         private bool isRatioCalculated = false;
+
+        // Add this with your other private fields
+        private Queue<double> ratioHistory = new Queue<double>();
+
         protected override void OnStateChange()
         {
             try
@@ -799,6 +803,41 @@ namespace NinjaTrader.NinjaScript.Indicators
                 // Total Ask Volume
                 RenderTarget.DrawText("Total Net $$ Vol:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 3 * rowHeight, labelWidth, rowHeight), textBrush);
                 RenderTarget.DrawText(FormatVolumeForDisplay(totalAskVolume), tableContentFormat, new SharpDX.RectangleF(valueX, contentY + 3 * rowHeight, tableWidth - labelWidth - 5, rowHeight), textBrush);
+
+                // Add volume status with color
+                string volumeStatusText;
+                SharpDX.Color statusColor;
+                float statusX = valueX + 120; // Adjust this value to position the status text
+
+                if (totalAskVolume > 10000000) // > $10M
+                {
+                    volumeStatusText = "BULLISH";
+                    statusColor = new SharpDX.Color((byte)0, (byte)255, (byte)0, (byte)255); // Green
+                }
+                else if (totalAskVolume < -10000000) // < -$10M
+                {
+                    volumeStatusText = "BEARISH";
+                    statusColor = new SharpDX.Color((byte)255, (byte)0, (byte)0, (byte)255); // Red
+                }
+                else
+                {
+                    volumeStatusText = "RANGE";
+                    statusColor = new SharpDX.Color((byte)255, (byte)255, (byte)0, (byte)255); // Yellow
+                }
+
+                // Create bold format for status
+                using (var boldFormat = new SharpDX.DirectWrite.TextFormat(
+                    Core.Globals.DirectWriteFactory, 
+                    "Arial", 
+                    SharpDX.DirectWrite.FontWeight.Bold,
+                    SharpDX.DirectWrite.FontStyle.Normal,
+                    12))
+                using (var statusBrush = new SharpDX.Direct2D1.SolidColorBrush(RenderTarget, statusColor))
+                {
+                    RenderTarget.DrawText(volumeStatusText, boldFormat, 
+                        new SharpDX.RectangleF(statusX, contentY + 3 * rowHeight, 100, rowHeight), 
+                        statusBrush);
+                }
 
                 // Time Since Last Update
                 RenderTarget.DrawText("Time Since Update:", tableContentFormat, new SharpDX.RectangleF(x + 5, contentY + 4 * rowHeight, labelWidth, rowHeight), textBrush);
